@@ -246,6 +246,30 @@ func TestDispatchOne_UnsupportedDoesNotCountAsError(t *testing.T) {
 	}
 }
 
+func TestSupportedResources_DispatchHonoursTheClaim(t *testing.T) {
+	// Every kind SupportedResources advertises MUST round-trip
+	// through dispatch as "ok" (not "unsupported") when the wclient
+	// no-ops (empty PortalURL). Catches a missing case in the
+	// dispatch switch the moment it drifts from the claim.
+	m := metrics.New()
+	for _, kind := range SupportedResources() {
+		a := &Agent{
+			W: scenario.Workload{
+				Name:      "wl-" + kind,
+				Tenant:    "t",
+				Resources: []string{kind},
+			},
+			Logger:   nullLogger(),
+			Client:   wclient.New(nullLogger()),
+			Dispatch: m.Dispatch,
+		}
+		a.dispatchOne(context.Background())
+		if got := readCounter(t, m.Dispatch, kind, "create", "ok"); got != 1 {
+			t.Errorf("%s : create.ok counter = %v, want 1 (kind claims support but dispatch says otherwise)", kind, got)
+		}
+	}
+}
+
 func TestDispatchOne_UnsupportedResourceLabelsAccordingly(t *testing.T) {
 	// "bucket" + "share" + "sshkey" remain scaffold-only — the
 	// agent must still drive without panicking, but label the

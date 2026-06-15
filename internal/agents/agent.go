@@ -204,3 +204,13 @@ func max1(n int) int {
 	}
 	return n
 }
+
+// SupportedResources is the canonical list of resource kinds the
+// dispatch switch handles. Kept here so the agents package is the
+// single source of truth — main.go reads this at startup to warn
+// the operator when a workload references something else (typo,
+// or driver landed in a follow-up). Must stay in lockstep with
+// the dispatch switch above.
+func SupportedResources() []string {
+	return []string{"microvm", "volume", "network", "security-group", "dns-zone"}
+}

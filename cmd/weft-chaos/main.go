@@ -28,6 +28,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/openweft/weft-chaos/internal/agents"
 	"github.com/openweft/weft-chaos/internal/cluster"
 	"github.com/openweft/weft-chaos/internal/metrics"
 	"github.com/openweft/weft-chaos/internal/orchestrate"
@@ -188,6 +189,7 @@ func doRun(rf *runFlags) error {
 		"workloads", len(sc.Workloads),
 		"injectors", len(sc.Injectors),
 		"invariants", len(sc.Invariants))
+	warnUnsupportedResources(logger, sc)
 
 	// Production guard : refuse to run against a cluster marked
 	// `production = true` in cluster.hcl unless the operator
@@ -235,6 +237,28 @@ func doRun(rf *runFlags) error {
 		ReportPath:   rf.reportPath,
 		StartedAt:    time.Now().UTC(),
 	})
+}
+
+// warnUnsupportedResources walks every workload + logs a Warn for
+// each resource kind that no dispatch case handles. Dispatch will
+// still mark these "unsupported" + bump the counter, but a typo
+// (e.g. `"microvms"` vs `"microvm"`) deserves an upfront warning
+// rather than silent counter growth that an operator has to grep
+// out of /metrics to find.
+func warnUnsupportedResources(logger *slog.Logger, sc *scenario.Scenario) {
+	supported := map[string]bool{}
+	for _, k := range agents.SupportedResources() {
+		supported[k] = true
+	}
+	for _, w := range sc.Workloads {
+		for _, r := range w.Resources {
+			if !supported[r] {
+				logger.Warn("workload references unsupported resource",
+					"workload", w.Name, "resource", r,
+					"supported", agents.SupportedResources())
+			}
+		}
+	}
 }
 
 // printPlan dumps the parsed scenario to slog so an operator can
