@@ -164,6 +164,7 @@ func run() error {
 		Metrics:      metricsSet,
 		Logger:       logger,
 		ScenarioPath: *scenarioPath,
+		ClusterName:  clusterCfg.Name,
 		ReportPath:   *reportPath,
 		StartedAt:    time.Now().UTC(),
 	})

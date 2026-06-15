@@ -30,9 +30,53 @@ type Report struct {
 	StartedAt    time.Time           `json:"started_at"`
 	EndedAt      time.Time           `json:"ended_at"`
 	ScenarioPath string              `json:"scenario"`
+	ClusterName  string              `json:"cluster,omitempty"`
+	Summary      Summary             `json:"summary"`
 	Workloads    []WorkloadResult    `json:"workloads"`
 	Injectors    []InjectorTimeline  `json:"injectors"`
 	Invariants   []InvariantTimeline `json:"invariants"`
+}
+
+// Summary is the operator-grade "did this run pass" cell. Reading
+// it first answers the question 95 % of the time ; the timelines
+// below explain WHICH invariant blew + when. Designed for jq +
+// alert pipelines : `jq '.summary.total_breaches > 0'` is the
+// canonical gate.
+type Summary struct {
+	TotalBreaches  int            `json:"total_breaches"`
+	BreachesByKind map[string]int `json:"breaches_by_kind,omitempty"`
+	BreachesByName map[string]int `json:"breaches_by_name,omitempty"`
+	DurationS      float64        `json:"duration_s"`
+	Workloads      int            `json:"workloads"`
+	Injectors      int            `json:"injectors"`
+	Invariants     int            `json:"invariants"`
+}
+
+// Summarize computes the Summary in one pass over the report's
+// child collections. Called by orchestrate.Run after the timeline
+// is assembled ; keeping it pure here means a downstream tool
+// reading just the JSON can also reconstruct + audit the totals.
+func (r *Report) Summarize() {
+	s := Summary{
+		Workloads:      len(r.Workloads),
+		Injectors:      len(r.Injectors),
+		Invariants:     len(r.Invariants),
+		BreachesByKind: map[string]int{},
+		BreachesByName: map[string]int{},
+	}
+	if !r.EndedAt.IsZero() && !r.StartedAt.IsZero() {
+		s.DurationS = r.EndedAt.Sub(r.StartedAt).Seconds()
+	}
+	for _, it := range r.Invariants {
+		n := len(it.Breaches)
+		if n == 0 {
+			continue
+		}
+		s.TotalBreaches += n
+		s.BreachesByKind[it.Kind] += n
+		s.BreachesByName[it.Name] += n
+	}
+	r.Summary = s
 }
 
 // WorkloadResult aggregates one workload's counters at exit.

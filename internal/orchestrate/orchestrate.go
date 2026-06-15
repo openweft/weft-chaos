@@ -43,6 +43,7 @@ type Options struct {
 	Metrics      *metrics.Set
 	Logger       *slog.Logger
 	ScenarioPath string
+	ClusterName  string
 	ReportPath   string
 	StartedAt    time.Time
 }
@@ -123,8 +124,23 @@ func Run(ctx context.Context, opts Options) error {
 		StartedAt:    opts.StartedAt,
 		EndedAt:      time.Now().UTC(),
 		ScenarioPath: opts.ScenarioPath,
+		ClusterName:  opts.ClusterName,
 		Invariants:   collectInvariantTimelines(opts.Scenario, rec),
 	}
+	// Build workload + injector skeleton entries from the scenario
+	// so the Summary counts match what an operator wrote — even
+	// scaffold-only injectors deserve a row.
+	for _, w := range opts.Scenario.Workloads {
+		r.Workloads = append(r.Workloads, report.WorkloadResult{
+			Name: w.Name, Tenant: w.Tenant,
+		})
+	}
+	for _, i := range opts.Scenario.Injectors {
+		r.Injectors = append(r.Injectors, report.InjectorTimeline{
+			Name: i.Name, Kind: i.Kind,
+		})
+	}
+	r.Summarize()
 	if err := report.Write(r, opts.ReportPath); err != nil {
 		return fmt.Errorf("write report: %w", err)
 	}
