@@ -51,3 +51,11 @@ invariant "no_cross_tenant_audit_leak" {
   kind   = "audit_tenant_isolation"
   window = "30s"
 }
+
+invariant "endpoints_alive" {
+  kind   = "healthy_endpoint"
+  window = "10s"
+  params = {
+    urls = "https://weft.example.com/api/healthz,https://infra.weft.example.com/api/healthz"
+  }
+}
