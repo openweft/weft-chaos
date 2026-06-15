@@ -36,7 +36,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openweft/weft-chaos/internal/orchestrate"
 	"github.com/openweft/weft-chaos/internal/scenario"
+	"github.com/openweft/weft-chaos/internal/wclient"
 )
 
 // version + commit + date are linker-stamped via the same
@@ -113,24 +115,24 @@ func run() error {
 		return nil
 	}
 
-	// TODO(weft-chaos) :
-	//   - load cluster.hcl, refuse on `production = true` unless yolo
-	//   - load scenario.hcl, build the execution plan
-	//   - spawn agent goroutines (one per workload)
-	//   - spawn injector goroutines (one per injector schedule entry)
-	//   - spawn invariant goroutines (one per checker, scrape /metrics + /api/audit-log)
-	//   - on runCtx.Done() : stop workloads, drain invariants for 30s, write report
-	//
-	// The scaffold ships a stable CLI surface + the directory shape ;
-	// the agents / injectors / invariants subpackages each ship one
-	// canonical sample so contributors have a template.
-
-	_ = runCtx
-	_ = reportPath
+	// TODO(weft-chaos) : real cluster.hcl parser to check
+	// production = true and refuse without --yolo. Today we
+	// accept any file shape ; this is a sandbox-only run.
 	_ = yolo
 
-	logger.Info("scaffold-only build : the live pilot path lands in a follow-up commit ; this binary's job today is to ratify the CLI surface + repo layout")
-	return nil
+	client := wclient.New(logger)
+	if err := client.Dial(runCtx); err != nil {
+		return fmt.Errorf("wclient: %w", err)
+	}
+
+	return orchestrate.Run(runCtx, orchestrate.Options{
+		Scenario:     sc,
+		Client:       client,
+		Logger:       logger,
+		ScenarioPath: *scenarioPath,
+		ReportPath:   *reportPath,
+		StartedAt:    time.Now().UTC(),
+	})
 }
 
 // printPlan dumps the parsed scenario to slog so an operator can
