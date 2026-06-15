@@ -29,7 +29,27 @@
 // operator UX is consistent across the stack.
 package scenario
 
-import "time"
+import (
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/hashicorp/hcl/v2/hclsimple"
+)
+
+// Load parses the scenario.hcl at path into a typed Scenario.
+// Errors surface the HCL diagnostic verbatim — the operator wants
+// to see "line 17: undefined block kind" not a generic wrapper.
+func Load(path string) (*Scenario, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("scenario: %w", err)
+	}
+	var s Scenario
+	if err := hclsimple.DecodeFile(path, nil, &s); err != nil {
+		return nil, fmt.Errorf("scenario: parse %s: %w", path, err)
+	}
+	return &s, nil
+}
 
 // Scenario is the parsed top-level document.
 type Scenario struct {

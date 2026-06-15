@@ -35,6 +35,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/openweft/weft-chaos/internal/scenario"
 )
 
 // version + commit + date are linker-stamped via the same
@@ -58,7 +60,7 @@ func run() error {
 
 	var (
 		cluster    = flag.String("cluster", "", "path to cluster.hcl (required)")
-		scenario   = flag.String("scenario", "", "path to scenario.hcl describing workloads + injectors + invariants (required)")
+		scenarioPath = flag.String("scenario", "", "path to scenario.hcl describing workloads + injectors + invariants (required)")
 		duration   = flag.Duration("duration", 30*time.Minute, "total runtime ; injectors + workloads stop at the deadline + invariants drain")
 		dryRun     = flag.Bool("dry-run", false, "parse the scenario, print the execution plan, exit without touching the cluster")
 		yolo       = flag.Bool("i-know-what-im-doing", false, "override the production = true guard in cluster.hcl ; never set this by default")
@@ -70,14 +72,14 @@ func run() error {
 		fmt.Printf("weft-chaos %s (%s) built %s\n", version, commit, date)
 		return nil
 	}
-	if *cluster == "" || *scenario == "" {
+	if *cluster == "" || *scenarioPath == "" {
 		flag.Usage()
 		return fmt.Errorf("--cluster and --scenario are required")
 	}
 
 	logger.Info("weft-chaos starting",
 		"version", version, "commit", commit,
-		"cluster", *cluster, "scenario", *scenario,
+		"cluster", *cluster, "scenario", *scenarioPath,
 		"duration", *duration, "dry_run", *dryRun)
 
 	// Two-phase context : the outer is bound to SIGINT/SIGTERM so the
@@ -89,8 +91,25 @@ func run() error {
 	runCtx, cancel := context.WithTimeout(rootCtx, *duration)
 	defer cancel()
 
+	// Parse the scenario unconditionally — even live runs need the
+	// plan in hand before they touch the cluster. cluster.hcl
+	// parsing lands once weft repo exports its parser ; today we
+	// only validate the file exists so a typo'd --cluster fails
+	// loud before the chaos starts.
+	if _, err := os.Stat(*cluster); err != nil {
+		return fmt.Errorf("cluster file : %w", err)
+	}
+	sc, err := scenario.Load(*scenarioPath)
+	if err != nil {
+		return err
+	}
+	logger.Info("scenario loaded",
+		"workloads", len(sc.Workloads),
+		"injectors", len(sc.Injectors),
+		"invariants", len(sc.Invariants))
+
 	if *dryRun {
-		logger.Info("dry-run : scenario + cluster parsed, exiting before any injection")
+		printPlan(logger, sc)
 		return nil
 	}
 
@@ -112,4 +131,29 @@ func run() error {
 
 	logger.Info("scaffold-only build : the live pilot path lands in a follow-up commit ; this binary's job today is to ratify the CLI surface + repo layout")
 	return nil
+}
+
+// printPlan dumps the parsed scenario to slog so an operator can
+// eyeball "yes that's what I asked for" before the live run does
+// any damage. One slog line per block keeps the output greppable
+// + jq-friendly when the logger is in JSON mode.
+func printPlan(logger *slog.Logger, sc *scenario.Scenario) {
+	for _, w := range sc.Workloads {
+		logger.Info("plan : workload",
+			"name", w.Name, "tenant", w.Tenant,
+			"steady_rps", w.SteadyRPS, "burst_rps", w.BurstRPS,
+			"burst_every", w.BurstEvery, "burst_for", w.BurstFor,
+			"resources", w.Resources)
+	}
+	for _, i := range sc.Injectors {
+		logger.Info("plan : injector",
+			"name", i.Name, "kind", i.Kind,
+			"selector", i.Selector,
+			"at_offset", i.AtOffset, "recover_at", i.RecoverAt)
+	}
+	for _, v := range sc.Invariants {
+		logger.Info("plan : invariant",
+			"name", v.Name, "kind", v.Kind,
+			"window", v.Window, "params", v.Params)
+	}
 }
