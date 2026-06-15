@@ -138,10 +138,15 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		r.Workloads = append(r.Workloads, wr)
 	}
-	for _, i := range opts.Scenario.Injectors {
-		r.Injectors = append(r.Injectors, report.InjectorTimeline{
-			Name: i.Name, Kind: i.Kind,
-		})
+	for i, ispec := range opts.Scenario.Injectors {
+		row := report.InjectorTimeline{Name: ispec.Name, Kind: ispec.Kind}
+		if i < len(injectorList) {
+			applied, reverted, detail := injectorList[i].event.snapshot()
+			row.AppliedAt = applied
+			row.RevertedAt = reverted
+			row.Detail = detail
+		}
+		r.Injectors = append(r.Injectors, row)
 	}
 	r.Summarize()
 	if err := report.Write(r, opts.ReportPath); err != nil {
@@ -176,14 +181,49 @@ func buildAgents(sc *scenario.Scenario, client *wclient.Client, m *metrics.Set, 
 	return out, nil
 }
 
+// injectorEvent captures one Apply/Revert pair for the timeline.
+// Populated by scheduledInjector.run via the shared journal ; the
+// report writer reads at drain.
+type injectorEvent struct {
+	mu         sync.Mutex
+	appliedAt  time.Time
+	revertedAt time.Time
+	detail     string
+}
+
+func (e *injectorEvent) markApplied(t time.Time, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.appliedAt = t
+	if err != nil {
+		e.detail = "Apply: " + err.Error()
+	}
+}
+
+func (e *injectorEvent) markReverted(t time.Time, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.revertedAt = t
+	if err != nil && e.detail == "" {
+		e.detail = "Revert: " + err.Error()
+	}
+}
+
+func (e *injectorEvent) snapshot() (applied, reverted time.Time, detail string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.appliedAt, e.revertedAt, e.detail
+}
+
 // scheduledInjector pairs an Injector with its AtOffset / RecoverAt
 // schedule. The orchestrator builds these so the goroutine knows
 // when to Apply + when to Revert without re-parsing the block.
 type scheduledInjector struct {
-	inj       injectors.Injector
-	atOffset  time.Duration
-	recoverAt time.Duration
+	inj        injectors.Injector
+	atOffset   time.Duration
+	recoverAt  time.Duration
 	hasRecover bool
+	event      *injectorEvent
 }
 
 func (s scheduledInjector) run(ctx context.Context, logger *slog.Logger) {
@@ -196,7 +236,9 @@ func (s scheduledInjector) run(ctx context.Context, logger *slog.Logger) {
 		return
 	case <-applyT.C:
 	}
-	if err := s.inj.Apply(ctx); err != nil {
+	err := s.inj.Apply(ctx)
+	s.event.markApplied(time.Now().UTC(), err)
+	if err != nil {
 		logger.Error("injector Apply failed", "name", s.inj.Name(), "err", err.Error())
 	}
 	if !s.hasRecover {
@@ -212,14 +254,18 @@ func (s scheduledInjector) run(ctx context.Context, logger *slog.Logger) {
 	case <-ctx.Done():
 		// ctx cancelled mid-window : revert anyway so the
 		// cluster doesn't stay in the chaos state past the run.
-		if err := s.inj.Revert(context.Background()); err != nil {
+		err := s.inj.Revert(context.Background())
+		s.event.markReverted(time.Now().UTC(), err)
+		if err != nil {
 			logger.Error("injector Revert (on cancel) failed",
 				"name", s.inj.Name(), "err", err.Error())
 		}
 		return
 	case <-revertT.C:
 	}
-	if err := s.inj.Revert(ctx); err != nil {
+	err = s.inj.Revert(ctx)
+	s.event.markReverted(time.Now().UTC(), err)
+	if err != nil {
 		logger.Error("injector Revert failed", "name", s.inj.Name(), "err", err.Error())
 	}
 }
@@ -251,6 +297,7 @@ func buildInjectors(sc *scenario.Scenario, client *wclient.Client, logger *slog.
 		}
 		out = append(out, scheduledInjector{
 			inj: typed, atOffset: at, recoverAt: recover, hasRecover: i.RecoverAt != "",
+			event: &injectorEvent{},
 		})
 	}
 	return out, nil

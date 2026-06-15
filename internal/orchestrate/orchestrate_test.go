@@ -9,12 +9,14 @@ package orchestrate
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -246,6 +248,7 @@ func TestScheduledInjector_AppliesAtOffset(t *testing.T) {
 		atOffset:   50 * time.Millisecond,
 		recoverAt:  150 * time.Millisecond,
 		hasRecover: true,
+		event:      &injectorEvent{},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
@@ -255,6 +258,16 @@ func TestScheduledInjector_AppliesAtOffset(t *testing.T) {
 	}
 	if fake.reverted != 1 {
 		t.Errorf("Revert count = %d, want 1", fake.reverted)
+	}
+	applied, reverted, _ := si.event.snapshot()
+	if applied.IsZero() {
+		t.Error("event.appliedAt not stamped")
+	}
+	if reverted.IsZero() {
+		t.Error("event.revertedAt not stamped")
+	}
+	if !reverted.After(applied) {
+		t.Errorf("reverted (%v) not after applied (%v)", reverted, applied)
 	}
 }
 
@@ -268,6 +281,7 @@ func TestScheduledInjector_RevertOnEarlyCancel(t *testing.T) {
 		atOffset:   50 * time.Millisecond,
 		recoverAt:  10 * time.Second, // far past the cancel
 		hasRecover: true,
+		event:      &injectorEvent{},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -278,17 +292,49 @@ func TestScheduledInjector_RevertOnEarlyCancel(t *testing.T) {
 	if fake.reverted != 1 {
 		t.Errorf("Revert-on-cancel = %d, want 1", fake.reverted)
 	}
+	applied, reverted, _ := si.event.snapshot()
+	if applied.IsZero() || reverted.IsZero() {
+		t.Errorf("revert-on-cancel : applied=%v reverted=%v, both should be stamped", applied, reverted)
+	}
+}
+
+// TestScheduledInjector_ApplyErrorRecordedInDetail : a failing
+// Apply must surface in event.detail so the report explains why.
+func TestScheduledInjector_ApplyErrorRecordedInDetail(t *testing.T) {
+	fake := &countInjector{applyErr: fmt.Errorf("boom")}
+	si := scheduledInjector{
+		inj:        fake,
+		atOffset:   20 * time.Millisecond,
+		hasRecover: false,
+		event:      &injectorEvent{},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	si.run(ctx, nullLogger())
+	_, _, detail := si.event.snapshot()
+	if !strings.Contains(detail, "boom") {
+		t.Errorf("detail = %q, want to mention the Apply error", detail)
+	}
+	if !strings.Contains(detail, "Apply") {
+		t.Errorf("detail = %q, want 'Apply:' prefix", detail)
+	}
 }
 
 // countInjector implements injectors.Injector for tests : bumps
 // counters so we can assert order without touching a cluster.
+// applyErr / revertErr let a test simulate a failing call.
 type countInjector struct {
 	applied, reverted int
+	applyErr          error
+	revertErr         error
 }
 
-func (c *countInjector) Name() string                  { return "count" }
-func (c *countInjector) Apply(_ context.Context) error { c.applied++; return nil }
+func (c *countInjector) Name() string { return "count" }
+func (c *countInjector) Apply(_ context.Context) error {
+	c.applied++
+	return c.applyErr
+}
 func (c *countInjector) Revert(_ context.Context) error {
 	c.reverted++
-	return nil
+	return c.revertErr
 }
