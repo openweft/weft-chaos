@@ -210,6 +210,69 @@ func TestDeleteMicroVM_PathIncludesTenantAndName(t *testing.T) {
 	}
 }
 
+func TestCreateVolume_PostsExpectedPath(t *testing.T) {
+	var gotMethod, gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	t.Cleanup(srv.Close)
+	c := New(nullLogger())
+	c.PortalURL = srv.URL
+	if err := c.CreateVolume(context.Background(), "acme", "vol-1"); err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != "POST" {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/api/v1/volumes" {
+		t.Errorf("path = %q, want /api/v1/volumes", gotPath)
+	}
+	if !strings.Contains(gotBody, `"name":"vol-1"`) {
+		t.Errorf("body = %q, missing name", gotBody)
+	}
+}
+
+func TestCreateVolume_EmptyPortalURLNoOps(t *testing.T) {
+	c := New(nullLogger())
+	if err := c.CreateVolume(context.Background(), "acme", "v"); err != nil {
+		t.Errorf("empty portal CreateVolume = %v, want nil", err)
+	}
+}
+
+func TestDeleteVolume_IdempotentOn404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	c := New(nullLogger())
+	c.PortalURL = srv.URL
+	if err := c.DeleteVolume(context.Background(), "acme", "v"); err != nil {
+		t.Errorf("404 DELETE = %v, want nil", err)
+	}
+}
+
+func TestDeleteVolume_PathShape(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	c := New(nullLogger())
+	c.PortalURL = srv.URL
+	if err := c.DeleteVolume(context.Background(), "globex", "data"); err != nil {
+		t.Fatal(err)
+	}
+	want := "/api/v1/volumes/globex/data"
+	if gotPath != want {
+		t.Errorf("path = %q, want %q", gotPath, want)
+	}
+}
+
 func TestHealthz_ContextCancelAborts(t *testing.T) {
 	// A server that never responds — Healthz must respect the
 	// caller's cancelled context rather than hang on the

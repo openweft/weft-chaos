@@ -127,22 +127,22 @@ func (a *Agent) dispatchOne(ctx context.Context) {
 // dispatch routes one (resource, verb) tuple to the right wclient
 // method + returns a Prometheus-friendly result label.
 func (a *Agent) dispatch(ctx context.Context, resource, verb, name string) string {
+	var err error
 	switch resource {
 	case "microvm":
-		var err error
 		switch verb {
 		case "create":
 			err = a.Client.CreateMicroVM(ctx, a.W.Tenant, name)
 		case "delete":
 			err = a.Client.DeleteMicroVM(ctx, a.W.Tenant, name)
 		}
-		if err != nil {
-			a.Logger.Debug("dispatch failed",
-				"workload", a.W.Name, "resource", resource,
-				"verb", verb, "err", err.Error())
-			return "error"
+	case "volume":
+		switch verb {
+		case "create":
+			err = a.Client.CreateVolume(ctx, a.W.Tenant, name)
+		case "delete":
+			err = a.Client.DeleteVolume(ctx, a.W.Tenant, name)
 		}
-		return "ok"
 	default:
 		// Driver not yet implemented for this resource kind. The
 		// counter records "unsupported" so an operator can see how
@@ -150,6 +150,13 @@ func (a *Agent) dispatch(ctx context.Context, resource, verb, name string) strin
 		// touched the cluster.
 		return "unsupported"
 	}
+	if err != nil {
+		a.Logger.Debug("dispatch failed",
+			"workload", a.W.Name, "resource", resource,
+			"verb", verb, "err", err.Error())
+		return "error"
+	}
+	return "ok"
 }
 
 func max1(n int) int {

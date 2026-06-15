@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -88,16 +89,33 @@ func TestDispatchOne_AlternatesVerbsAndRoundRobinsResources(t *testing.T) {
 	}
 }
 
-func TestDispatchOne_UnsupportedResourceLabelsAccordingly(t *testing.T) {
-	// "volume" driver doesn't exist yet — agent must still drive
-	// (no panic), but label the counter with result="unsupported".
+func TestDispatchOne_RoutesVolumeResource(t *testing.T) {
+	var (
+		creates atomic.Int32
+		deletes atomic.Int32
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/volumes") {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		switch r.Method {
+		case http.MethodPost:
+			creates.Add(1)
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodDelete:
+			deletes.Add(1)
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
 	m := metrics.New()
 	client := wclient.New(nullLogger())
-	// PortalURL empty so even microvm would no-op ; but here we
-	// pass only volume so unsupported is the path tested.
+	client.PortalURL = srv.URL
 	a := &Agent{
 		W: scenario.Workload{
-			Name:      "vol-only",
+			Name:      "vol-mix",
 			Tenant:    "globex",
 			Resources: []string{"volume"},
 		},
@@ -105,12 +123,41 @@ func TestDispatchOne_UnsupportedResourceLabelsAccordingly(t *testing.T) {
 		Client:   client,
 		Dispatch: m.Dispatch,
 	}
+	for i := 0; i < 4; i++ {
+		a.dispatchOne(context.Background())
+	}
+	if creates.Load() != 2 || deletes.Load() != 2 {
+		t.Errorf("volumes : POST=%d DELETE=%d, want 2/2", creates.Load(), deletes.Load())
+	}
+	if got := readCounter(t, m.Dispatch, "volume", "create", "ok"); got != 2 {
+		t.Errorf("volume create counter = %v, want 2", got)
+	}
+	if got := readCounter(t, m.Dispatch, "volume", "delete", "ok"); got != 2 {
+		t.Errorf("volume delete counter = %v, want 2", got)
+	}
+}
+
+func TestDispatchOne_UnsupportedResourceLabelsAccordingly(t *testing.T) {
+	// "dns-zone" driver doesn't exist yet (microvm + volume do) —
+	// agent must still drive (no panic), but label the counter
+	// with result="unsupported".
+	m := metrics.New()
+	a := &Agent{
+		W: scenario.Workload{
+			Name:      "dns-only",
+			Tenant:    "initech",
+			Resources: []string{"dns-zone"},
+		},
+		Logger:   nullLogger(),
+		Client:   wclient.New(nullLogger()),
+		Dispatch: m.Dispatch,
+	}
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
 		a.dispatchOne(ctx)
 	}
-	c := readCounter(t, m.Dispatch, "volume", "create", "unsupported") +
-		readCounter(t, m.Dispatch, "volume", "delete", "unsupported")
+	c := readCounter(t, m.Dispatch, "dns-zone", "create", "unsupported") +
+		readCounter(t, m.Dispatch, "dns-zone", "delete", "unsupported")
 	if c != 3 {
 		t.Errorf("unsupported counter = %v, want 3", c)
 	}

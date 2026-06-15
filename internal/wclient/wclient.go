@@ -252,6 +252,62 @@ func (c *Client) DeleteMicroVM(ctx context.Context, tenant, name string) error {
 	return nil
 }
 
+// CreateVolume posts a minimal volume spec to the cluster's
+// /api/v1/volumes endpoint. Same shape contract as CreateMicroVM :
+// {"name", "tenant"}, server fills defaults (size_gb, backend, …).
+// Empty PortalURL = no-op.
+func (c *Client) CreateVolume(ctx context.Context, tenant, name string) error {
+	if c.PortalURL == "" {
+		return nil
+	}
+	body, _ := json.Marshal(map[string]string{"name": name, "tenant": tenant})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.PortalURL+"/api/v1/volumes", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create volume: new request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("create volume %s/%s: %w", tenant, name, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("create volume %s/%s: status %d", tenant, name, resp.StatusCode)
+	}
+	return nil
+}
+
+// DeleteVolume symmetrically removes a volume. 404 is idempotent.
+func (c *Client) DeleteVolume(ctx context.Context, tenant, name string) error {
+	if c.PortalURL == "" {
+		return nil
+	}
+	url := fmt.Sprintf("%s/api/v1/volumes/%s/%s", c.PortalURL, tenant, name)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return fmt.Errorf("delete volume: new request: %w", err)
+	}
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("delete volume %s/%s: %w", tenant, name, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("delete volume %s/%s: status %d", tenant, name, resp.StatusCode)
+	}
+	return nil
+}
+
 // AsTenant returns a sub-client bound to one tenant's portal — the
 // way the invariants test isolation. The returned client only ever
 // hits the tenant portal even if the caller has cluster-admin
