@@ -94,6 +94,10 @@ func (z *ZombiesZero) evaluate(ctx context.Context, rec *Recorder, url, metric s
 	defer cancel()
 	value, err := z.Client.ScrapeMetric(probeCtx, url, metric)
 	if err != nil {
+		// Outer ctx cancelled = shutdown, not a chaos signal.
+		if ctx.Err() != nil {
+			return
+		}
 		// MetricNotFound during a chaos run is interesting — the
 		// scraped target restarted or the gauge wasn't published.
 		// Either way, log as a breach so the timeline records it.

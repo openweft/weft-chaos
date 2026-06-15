@@ -80,6 +80,22 @@ func TestBuildInjectors_NetworkPartitionWired(t *testing.T) {
 	}
 }
 
+func TestBuildInvariants_BusDropsZeroWired(t *testing.T) {
+	sc := &scenario.Scenario{
+		Invariants: []scenario.Invariant{
+			{Name: "drops", Kind: "bus_drops_zero", Window: "1s",
+				Params: map[string]string{"url": "http://localhost:7770/metrics"}},
+		},
+	}
+	list, err := buildInvariants(sc, wclient.New(nullLogger()), nullLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].Name() != "drops" {
+		t.Errorf("buildInvariants bus_drops_zero mis-wired : %+v", list)
+	}
+}
+
 func TestBuildInvariants_ZombiesZeroWired(t *testing.T) {
 	sc := &scenario.Scenario{
 		Invariants: []scenario.Invariant{

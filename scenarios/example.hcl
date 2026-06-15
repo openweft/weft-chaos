@@ -85,3 +85,16 @@ invariant "no_zombie_vms" {
     metric    = "weft_vm_zombies"
   }
 }
+
+# Event-bus drops : weft v0.1.7+ publishes `weft_bus_dropped_total`
+# per subscriber. Any growth between rounds means a watcher fell
+# behind ; reconcile loops + registry consumers are at risk.
+invariant "no_bus_drops" {
+  kind   = "bus_drops_zero"
+  window = "30s"
+  params = {
+    url       = "https://weft.example.com/metrics"
+    threshold = "0"
+    metric    = "weft_bus_dropped_total"
+  }
+}

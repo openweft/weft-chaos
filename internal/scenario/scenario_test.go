@@ -25,19 +25,28 @@ func TestLoad_ExampleScenarioParses(t *testing.T) {
 	if len(sc.Workloads) != 3 {
 		t.Errorf("workloads = %d, want 3 (acme + globex + initech)", len(sc.Workloads))
 	}
-	if len(sc.Injectors) != 1 {
-		t.Errorf("injectors = %d, want 1 (dc2-cordon)", len(sc.Injectors))
+	if len(sc.Injectors) != 2 {
+		t.Errorf("injectors = %d, want 2 (dc2-cordon + dc2-partition)", len(sc.Injectors))
 	}
-	if len(sc.Invariants) != 2 {
-		t.Errorf("invariants = %d, want 2", len(sc.Invariants))
+	if len(sc.Invariants) != 4 {
+		t.Errorf("invariants = %d, want 4 (audit + endpoints + zombies + bus drops)", len(sc.Invariants))
 	}
 
 	// Spot-check the dc2-cordon block — Selector + AtOffset
 	// MUST round-trip exactly or the injector's `az=dc2`
 	// pattern matcher will fail at runtime.
-	inj := sc.Injectors[0]
-	if inj.Name != "dc2-cordon" || inj.Selector != "az=dc2" || inj.AtOffset != "10m" {
-		t.Errorf("dc2-cordon spec = %+v, schema regressed", inj)
+	var cordon *Injector
+	for i := range sc.Injectors {
+		if sc.Injectors[i].Name == "dc2-cordon" {
+			cordon = &sc.Injectors[i]
+			break
+		}
+	}
+	if cordon == nil {
+		t.Fatal("dc2-cordon block missing from example.hcl")
+	}
+	if cordon.Selector != "az=dc2" || cordon.AtOffset != "10m" {
+		t.Errorf("dc2-cordon spec = %+v, schema regressed", cordon)
 	}
 }
 
