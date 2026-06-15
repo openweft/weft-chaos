@@ -14,7 +14,9 @@
 package wclient
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -33,9 +35,16 @@ type Client struct {
 	// 5 s-timeout http.Client at New() time so a hung endpoint
 	// doesn't stall an invariant's polling loop.
 	HTTPClient *http.Client
+	// PortalURL is the base URL agents POST to (e.g.
+	// "https://weft.example.com"). Empty = the resource methods
+	// are no-ops, which lets unit tests + dry-run smokes exercise
+	// the dispatch loop without a live server.
+	PortalURL string
+	// Token is the bearer credential sent on resource calls. Empty
+	// = no Authorization header. Set via env or --token at the CLI.
+	Token string
 	// TODO(weft-chaos) : OIDC token source, gRPC conns to weft-
-	// agent + weft-network, REST client to /api/audit-log with the
-	// session header set, AsTenant fork that swaps the bearer.
+	// agent + weft-network, AsTenant fork that swaps the bearer.
 }
 
 // New returns a not-yet-connected client. Call Dial(ctx) before
@@ -175,6 +184,72 @@ func parseMetric(body []byte, metric string) (float64, error) {
 		return 0, ErrMetricNotFound
 	}
 	return total, nil
+}
+
+// CreateMicroVM posts a minimal microVM spec to the cluster's
+// /api/v1/microvms endpoint. The tenant header gates which project
+// the new microVM lands under. With an empty PortalURL the call
+// short-circuits to nil — unit tests + dry-run smokes use this to
+// exercise the dispatch loop without needing a server.
+//
+// Body shape : {"name": "<name>", "tenant": "<tenant>"}. The real
+// weft-webui POST surface accepts a much richer block (image, kernel,
+// memory_mb, disk_gb…) ; chaos sends only the identity fields + lets
+// the cluster's defaults resolve the rest, so the harness stays
+// resilient to schema churn upstream.
+func (c *Client) CreateMicroVM(ctx context.Context, tenant, name string) error {
+	if c.PortalURL == "" {
+		return nil
+	}
+	body, _ := json.Marshal(map[string]string{"name": name, "tenant": tenant})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.PortalURL+"/api/v1/microvms", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create microvm: new request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("create microvm %s/%s: %w", tenant, name, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("create microvm %s/%s: status %d", tenant, name, resp.StatusCode)
+	}
+	return nil
+}
+
+// DeleteMicroVM symmetrically removes a microVM by tenant+name.
+// Empty PortalURL = no-op, same rationale as CreateMicroVM.
+func (c *Client) DeleteMicroVM(ctx context.Context, tenant, name string) error {
+	if c.PortalURL == "" {
+		return nil
+	}
+	url := fmt.Sprintf("%s/api/v1/microvms/%s/%s", c.PortalURL, tenant, name)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return fmt.Errorf("delete microvm: new request: %w", err)
+	}
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("delete microvm %s/%s: %w", tenant, name, err)
+	}
+	defer resp.Body.Close()
+	// 404 is fine — chaos may try to delete the same name twice ;
+	// idempotence is the kindness the operator deserves.
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("delete microvm %s/%s: status %d", tenant, name, resp.StatusCode)
+	}
+	return nil
 }
 
 // AsTenant returns a sub-client bound to one tenant's portal — the

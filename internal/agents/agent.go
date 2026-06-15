@@ -7,20 +7,26 @@
 // ctx at scenario deadline or on SIGINT ; agents drain in-flight
 // requests, emit their final counters, and exit.
 //
-// Scaffold-only : the cluster client lives in internal/wclient ; this
-// package's job is the cadence + the resource-mix dispatch. The full
-// driver per resource (microvm / volume / network / SG / DNS / etc.)
-// lands as follow-up commits, one resource per turn so each driver
-// gets focused review.
+// What's wired today : microvm CREATE / DELETE rounds through
+// wclient.CreateMicroVM/DeleteMicroVM. With an empty PortalURL the
+// wclient calls short-circuit to nil, so chaos still exercises its
+// own dispatch loop + bumps its own counters without a real cluster.
+// Other resources (volume / network / SG / DNS / etc.) land as
+// follow-up commits, one resource per turn so each driver gets
+// focused review.
 
 package agents
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/openweft/weft-chaos/internal/scenario"
+	"github.com/openweft/weft-chaos/internal/wclient"
 )
 
 // Agent is a single tenant-scoped workload driver. The Run method
@@ -28,6 +34,20 @@ import (
 type Agent struct {
 	W      scenario.Workload
 	Logger *slog.Logger
+	// Client touches the cluster. Mandatory ; pass a no-op client
+	// (PortalURL == "") in tests + dry-run smokes.
+	Client *wclient.Client
+	// Dispatch counter (labels : resource, verb, result). Optional ;
+	// when nil the agent still drives but no metrics are emitted.
+	Dispatch *prometheus.CounterVec
+
+	// resourceIdx is the round-robin cursor over W.Resources. Each
+	// dispatchOne advances it ; this keeps the resource mix
+	// deterministic + auditable from the log stream.
+	resourceIdx int
+	// dispatched is the monotonic tick count used to derive a name
+	// suffix per CREATE call + alternate verb pick.
+	dispatched int
 }
 
 // Run drives the workload at SteadyRPS, switching to BurstRPS every
@@ -60,7 +80,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			a.Logger.Info("agent drained", "workload", a.W.Name)
 			return nil
 		case <-tick.C:
-			a.dispatchOne()
+			a.dispatchOne(ctx)
 			now := time.Now()
 			if burstEvery > 0 && !bursting && now.Sub(lastBurst) >= burstEvery {
 				bursting = true
@@ -79,17 +99,57 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 }
 
-// dispatchOne picks one of the workload's configured resources +
-// fires a single CRUD round. The actual cluster-touching call lives
-// in internal/wclient ; this scaffold spins in place to surface the
-// agent shape without driving traffic.
-func (a *Agent) dispatchOne() {
+// dispatchOne picks the next resource (round-robin) + fires one
+// CRUD round. Verb alternates CREATE → DELETE → CREATE → … so a
+// run leaves the cluster at a similar resource count to where it
+// started.
+func (a *Agent) dispatchOne(ctx context.Context) {
 	if len(a.W.Resources) == 0 {
 		return
 	}
-	// TODO(weft-chaos) : pick resource via round-robin or weighted,
-	// dispatch into wclient.Do(resourceKind, tenant) which encapsulates
-	// the CRUD round (create → maybe-update → delete) per resource.
+	resource := a.W.Resources[a.resourceIdx%len(a.W.Resources)]
+	a.resourceIdx++
+
+	verb := "create"
+	if a.dispatched%2 == 1 {
+		verb = "delete"
+	}
+	a.dispatched++
+
+	name := fmt.Sprintf("chaos-%s-%d", a.W.Name, a.dispatched)
+
+	result := a.dispatch(ctx, resource, verb, name)
+	if a.Dispatch != nil {
+		a.Dispatch.WithLabelValues(resource, verb, result).Inc()
+	}
+}
+
+// dispatch routes one (resource, verb) tuple to the right wclient
+// method + returns a Prometheus-friendly result label.
+func (a *Agent) dispatch(ctx context.Context, resource, verb, name string) string {
+	switch resource {
+	case "microvm":
+		var err error
+		switch verb {
+		case "create":
+			err = a.Client.CreateMicroVM(ctx, a.W.Tenant, name)
+		case "delete":
+			err = a.Client.DeleteMicroVM(ctx, a.W.Tenant, name)
+		}
+		if err != nil {
+			a.Logger.Debug("dispatch failed",
+				"workload", a.W.Name, "resource", resource,
+				"verb", verb, "err", err.Error())
+			return "error"
+		}
+		return "ok"
+	default:
+		// Driver not yet implemented for this resource kind. The
+		// counter records "unsupported" so an operator can see how
+		// many rounds the scenario intended vs. how many actually
+		// touched the cluster.
+		return "unsupported"
+	}
 }
 
 func max1(n int) int {

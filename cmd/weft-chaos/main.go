@@ -36,6 +36,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openweft/weft-chaos/internal/metrics"
 	"github.com/openweft/weft-chaos/internal/orchestrate"
 	"github.com/openweft/weft-chaos/internal/scenario"
 	"github.com/openweft/weft-chaos/internal/wclient"
@@ -67,6 +68,8 @@ func run() error {
 		dryRun     = flag.Bool("dry-run", false, "parse the scenario, print the execution plan, exit without touching the cluster")
 		yolo       = flag.Bool("i-know-what-im-doing", false, "override the production = true guard in cluster.hcl ; never set this by default")
 		reportPath = flag.String("report", "weft-chaos-report.json", "path to the JSON timeline report written at exit")
+		portalURL  = flag.String("portal-url", "", "base URL of the weft cluster portal (e.g. https://weft.example.com) ; empty = dispatchOne short-circuits to no-op")
+		token      = flag.String("token", "", "bearer token sent on resource calls ; empty = no Authorization header")
 		showVer    = flag.Bool("version", false, "print version + commit + build date, then exit")
 	)
 	flag.Parse()
@@ -121,13 +124,18 @@ func run() error {
 	_ = yolo
 
 	client := wclient.New(logger)
+	client.PortalURL = *portalURL
+	client.Token = *token
 	if err := client.Dial(runCtx); err != nil {
 		return fmt.Errorf("wclient: %w", err)
 	}
 
+	metricsSet := metrics.New()
+
 	return orchestrate.Run(runCtx, orchestrate.Options{
 		Scenario:     sc,
 		Client:       client,
+		Metrics:      metricsSet,
 		Logger:       logger,
 		ScenarioPath: *scenarioPath,
 		ReportPath:   *reportPath,

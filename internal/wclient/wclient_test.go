@@ -120,6 +120,96 @@ func TestScrapeMetric_IgnoresPrefixCollision(t *testing.T) {
 	}
 }
 
+func TestCreateMicroVM_PostsExpectedBody(t *testing.T) {
+	var (
+		gotMethod string
+		gotPath   string
+		gotAuth   string
+		gotBody   string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	t.Cleanup(srv.Close)
+	c := New(nullLogger())
+	c.PortalURL = srv.URL
+	c.Token = "abc123"
+	if err := c.CreateMicroVM(context.Background(), "acme", "vm1"); err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != "POST" {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/api/v1/microvms" {
+		t.Errorf("path = %q, want /api/v1/microvms", gotPath)
+	}
+	if gotAuth != "Bearer abc123" {
+		t.Errorf("auth header = %q, want Bearer abc123", gotAuth)
+	}
+	if !strings.Contains(gotBody, `"name":"vm1"`) || !strings.Contains(gotBody, `"tenant":"acme"`) {
+		t.Errorf("body = %q, want both name + tenant", gotBody)
+	}
+}
+
+func TestCreateMicroVM_EmptyPortalURLNoOps(t *testing.T) {
+	c := New(nullLogger())
+	// PortalURL deliberately empty.
+	if err := c.CreateMicroVM(context.Background(), "acme", "vm1"); err != nil {
+		t.Errorf("empty portal CreateMicroVM = %v, want nil", err)
+	}
+}
+
+func TestCreateMicroVM_Non2xxIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	c := New(nullLogger())
+	c.PortalURL = srv.URL
+	err := c.CreateMicroVM(context.Background(), "acme", "vm1")
+	if err == nil {
+		t.Fatal("500 = nil err, want error")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("err = %v, want mention of status code", err)
+	}
+}
+
+func TestDeleteMicroVM_IdempotentOn404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	c := New(nullLogger())
+	c.PortalURL = srv.URL
+	if err := c.DeleteMicroVM(context.Background(), "acme", "vm1"); err != nil {
+		t.Errorf("404 DELETE = %v, want nil (idempotent)", err)
+	}
+}
+
+func TestDeleteMicroVM_PathIncludesTenantAndName(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	c := New(nullLogger())
+	c.PortalURL = srv.URL
+	if err := c.DeleteMicroVM(context.Background(), "acme", "vm1"); err != nil {
+		t.Fatal(err)
+	}
+	want := "/api/v1/microvms/acme/vm1"
+	if gotPath != want {
+		t.Errorf("path = %q, want %q", gotPath, want)
+	}
+}
+
 func TestHealthz_ContextCancelAborts(t *testing.T) {
 	// A server that never responds — Healthz must respect the
 	// caller's cancelled context rather than hang on the

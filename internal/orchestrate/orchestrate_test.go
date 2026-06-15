@@ -34,7 +34,7 @@ func TestBuildAgents_ValidatesBurstDuration(t *testing.T) {
 			{Name: "bad", Tenant: "x", SteadyRPS: 1, BurstEvery: "not-a-duration"},
 		},
 	}
-	_, err := buildAgents(sc, nullLogger())
+	_, err := buildAgents(sc, wclient.New(nullLogger()), nil, nullLogger())
 	if err == nil {
 		t.Fatal("buildAgents on bad burst_every = nil, want err")
 	}

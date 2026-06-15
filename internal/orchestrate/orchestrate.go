@@ -24,6 +24,7 @@ import (
 	"github.com/openweft/weft-chaos/internal/agents"
 	"github.com/openweft/weft-chaos/internal/injectors"
 	"github.com/openweft/weft-chaos/internal/invariants"
+	"github.com/openweft/weft-chaos/internal/metrics"
 	"github.com/openweft/weft-chaos/internal/report"
 	"github.com/openweft/weft-chaos/internal/scenario"
 	"github.com/openweft/weft-chaos/internal/wclient"
@@ -39,6 +40,7 @@ const drainTimeout = 30 * time.Second
 type Options struct {
 	Scenario     *scenario.Scenario
 	Client       *wclient.Client
+	Metrics      *metrics.Set
 	Logger       *slog.Logger
 	ScenarioPath string
 	ReportPath   string
@@ -54,7 +56,7 @@ func Run(ctx context.Context, opts Options) error {
 	// Build the runtime objects. A construction error (e.g. an
 	// invariant with bad params) is fatal — we want to fail loud
 	// before any churn rather than silently skip.
-	agentList, err := buildAgents(opts.Scenario, opts.Logger)
+	agentList, err := buildAgents(opts.Scenario, opts.Client, opts.Metrics, opts.Logger)
 	if err != nil {
 		return fmt.Errorf("build agents: %w", err)
 	}
@@ -129,7 +131,7 @@ func Run(ctx context.Context, opts Options) error {
 
 // buildAgents instantiates one Agent per workload block. Cheap +
 // pure ; no IO.
-func buildAgents(sc *scenario.Scenario, logger *slog.Logger) ([]*agents.Agent, error) {
+func buildAgents(sc *scenario.Scenario, client *wclient.Client, m *metrics.Set, logger *slog.Logger) ([]*agents.Agent, error) {
 	out := make([]*agents.Agent, 0, len(sc.Workloads))
 	for _, w := range sc.Workloads {
 		// Validate the burst knobs at build time so a typo
@@ -141,7 +143,11 @@ func buildAgents(sc *scenario.Scenario, logger *slog.Logger) ([]*agents.Agent, e
 		if _, err := w.BurstForDuration(); err != nil {
 			return nil, fmt.Errorf("workload %q: burst_for %q: %w", w.Name, w.BurstFor, err)
 		}
-		out = append(out, &agents.Agent{W: w, Logger: logger})
+		a := &agents.Agent{W: w, Logger: logger, Client: client}
+		if m != nil {
+			a.Dispatch = m.Dispatch
+		}
+		out = append(out, a)
 	}
 	return out, nil
 }
