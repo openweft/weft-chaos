@@ -36,6 +36,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openweft/weft-chaos/internal/cluster"
 	"github.com/openweft/weft-chaos/internal/metrics"
 	"github.com/openweft/weft-chaos/internal/orchestrate"
 	"github.com/openweft/weft-chaos/internal/scenario"
@@ -62,7 +63,7 @@ func run() error {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	var (
-		cluster    = flag.String("cluster", "", "path to cluster.hcl (required)")
+		clusterPath = flag.String("cluster", "", "path to cluster.hcl (required)")
 		scenarioPath = flag.String("scenario", "", "path to scenario.hcl describing workloads + injectors + invariants (required)")
 		duration   = flag.Duration("duration", 30*time.Minute, "total runtime ; injectors + workloads stop at the deadline + invariants drain")
 		dryRun     = flag.Bool("dry-run", false, "parse the scenario, print the execution plan, exit without touching the cluster")
@@ -78,14 +79,14 @@ func run() error {
 		fmt.Printf("weft-chaos %s (%s) built %s\n", version, commit, date)
 		return nil
 	}
-	if *cluster == "" || *scenarioPath == "" {
+	if *clusterPath == "" || *scenarioPath == "" {
 		flag.Usage()
 		return fmt.Errorf("--cluster and --scenario are required")
 	}
 
 	logger.Info("weft-chaos starting",
 		"version", version, "commit", commit,
-		"cluster", *cluster, "scenario", *scenarioPath,
+		"cluster", *clusterPath, "scenario", *scenarioPath,
 		"duration", *duration, "dry_run", *dryRun)
 
 	// Two-phase context : the outer is bound to SIGINT/SIGTERM so the
@@ -98,13 +99,15 @@ func run() error {
 	defer cancel()
 
 	// Parse the scenario unconditionally — even live runs need the
-	// plan in hand before they touch the cluster. cluster.hcl
-	// parsing lands once weft repo exports its parser ; today we
-	// only validate the file exists so a typo'd --cluster fails
-	// loud before the chaos starts.
-	if _, err := os.Stat(*cluster); err != nil {
-		return fmt.Errorf("cluster file : %w", err)
+	// plan in hand before they touch the cluster.
+	clusterCfg, err := cluster.Load(*clusterPath)
+	if err != nil {
+		return err
 	}
+	logger.Info("cluster loaded",
+		"name", clusterCfg.Name,
+		"production", clusterCfg.Production,
+		"portal_url", clusterCfg.PortalURL)
 	sc, err := scenario.Load(*scenarioPath)
 	if err != nil {
 		return err
@@ -119,13 +122,23 @@ func run() error {
 		return nil
 	}
 
-	// TODO(weft-chaos) : real cluster.hcl parser to check
-	// production = true and refuse without --yolo. Today we
-	// accept any file shape ; this is a sandbox-only run.
-	_ = yolo
+	// Production guard : refuse to run against a cluster marked
+	// `production = true` in cluster.hcl unless the operator
+	// explicitly passed --i-know-what-im-doing.
+	if err := clusterCfg.ConfirmDestructive(*yolo); err != nil {
+		return err
+	}
+
+	// cluster.hcl's portal_url wins over the empty default. The
+	// CLI flag still trumps the file so an operator can point a
+	// shared cluster.hcl at an alternate portal for testing.
+	resolvedPortalURL := clusterCfg.PortalURL
+	if *portalURL != "" {
+		resolvedPortalURL = *portalURL
+	}
 
 	client := wclient.New(logger)
-	client.PortalURL = *portalURL
+	client.PortalURL = resolvedPortalURL
 	client.Token = *token
 	if err := client.Dial(runCtx); err != nil {
 		return fmt.Errorf("wclient: %w", err)
