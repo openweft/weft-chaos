@@ -317,7 +317,7 @@ func buildInvariants(sc *scenario.Scenario, client *wclient.Client, logger *slog
 		case "healthy_endpoint":
 			typed = &invariants.HealthyEndpoint{Spec: v, Logger: logger, Client: client}
 		case "audit_tenant_isolation":
-			typed = &invariants.AuditTenantIsolation{Spec: v, Logger: logger}
+			typed = &invariants.AuditTenantIsolation{Spec: v, Logger: logger, Client: client}
 		case "zombies_zero":
 			typed = &invariants.ZombiesZero{Spec: v, Logger: logger, Client: client}
 		case "bus_drops_zero":

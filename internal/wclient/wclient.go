@@ -297,6 +297,34 @@ func (c *Client) deleteResource(ctx context.Context, plural, tenant, name string
 	return nil
 }
 
+// FetchJSON GETs the given URL + returns the raw body bytes. Used
+// by invariants that need to walk a JSON response shape (e.g.
+// audit_tenant_isolation parsing /api/audit-log). Honours the
+// Authorization header when c.Token is set.
+//
+// Returns the raw body so the caller owns the unmarshal target —
+// chaos doesn't want to pin its understanding of every API shape
+// in wclient ; each invariant decodes what it needs.
+func (c *Client) FetchJSON(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("new request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, fmt.Errorf("fetch %s: status %d", url, resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
+}
+
 // AsTenant returns a sub-client bound to one tenant's portal — the
 // way the invariants test isolation. The returned client only ever
 // hits the tenant portal even if the caller has cluster-admin

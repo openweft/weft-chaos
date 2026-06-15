@@ -24,8 +24,10 @@ package invariants
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -94,46 +96,137 @@ func (r *Recorder) Snapshot() []Breach {
 // caller's leaks through. The whole point of the tenant portal is
 // to never see another tenant's audit trail (cf. webui commit
 // 3d1de0b) ; this invariant tests that property under load.
+//
+// Scenario block :
+//
+//	invariant "no_cross_tenant_audit_leak" {
+//	  kind   = "audit_tenant_isolation"
+//	  window = "30s"
+//	  params = {
+//	    tenants      = "acme,globex,initech"
+//	    url_template = "https://weft.example.com/api/v1/audit-log?tenant={tenant}"
+//	  }
+//	}
+//
+// For each tenant T in the CSV list, GETs the URL with {tenant}
+// substituted, parses the response as a JSON array of audit events,
+// and records a Breach for every event whose `tenant` field does
+// not equal T. A scrape error is itself recorded as a Breach.
 type AuditTenantIsolation struct {
 	Spec   scenario.Invariant
 	Logger *slog.Logger
-	// TODO(weft-chaos) : wclient handle for the tenant-portal API.
-	// One per tenant in the scenario ; the invariant fans the watch
-	// out across them.
+	Client interface {
+		FetchJSON(ctx context.Context, url string) ([]byte, error)
+	}
+}
+
+// auditEvent is the minimal shape the invariant cares about. The
+// real openweft audit-log carries far more fields ; we decode only
+// what the rule names.
+type auditEvent struct {
+	ID     string `json:"id,omitempty"`
+	Tenant string `json:"tenant,omitempty"`
+	Action string `json:"action,omitempty"`
 }
 
 func (a *AuditTenantIsolation) Name() string { return a.Spec.Name }
 
-// Run polls each configured tenant's /api/audit-log every
-// scrapeInterval, asserts that every returned event's tenant
-// matches the caller. Any cross-tenant event is a Breach.
+// Run polls each configured tenant's /api/audit-log every Window,
+// asserts that every returned event's tenant matches the caller.
+// Cross-tenant events + scrape errors are Breaches.
 func (a *AuditTenantIsolation) Run(ctx context.Context, rec *Recorder) error {
+	tenants := parseCSV(a.Spec.Params["tenants"])
+	if len(tenants) == 0 {
+		return fmt.Errorf("audit_tenant_isolation %q : params.tenants is empty", a.Spec.Name)
+	}
+	tmpl := a.Spec.Params["url_template"]
+	if tmpl == "" {
+		return fmt.Errorf("audit_tenant_isolation %q : params.url_template is empty", a.Spec.Name)
+	}
+	if !strings.Contains(tmpl, "{tenant}") {
+		return fmt.Errorf("audit_tenant_isolation %q : url_template %q : must contain {tenant}", a.Spec.Name, tmpl)
+	}
 	scrape, _ := a.Spec.WindowDuration()
 	if scrape <= 0 {
-		scrape = 10 * time.Second
+		scrape = 30 * time.Second
 	}
-	a.Logger.Info("invariant up", "name", a.Spec.Name, "window", scrape)
+	a.Logger.Info("invariant up",
+		"name", a.Spec.Name, "kind", a.Spec.Kind,
+		"tenants", tenants, "window", scrape)
+
 	t := time.NewTicker(scrape)
 	defer t.Stop()
+	a.evaluate(ctx, rec, tenants, tmpl, scrape)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-t.C:
-			a.evaluate(ctx, rec)
+			a.evaluate(ctx, rec, tenants, tmpl, scrape)
 		}
 	}
 }
 
-// evaluate runs one round. Stub today : the real call hits each
-// tenant's /api/audit-log, walks the response, records a breach
-// when the event.tenant doesn't match the caller's tenant claim.
-func (a *AuditTenantIsolation) evaluate(ctx context.Context, rec *Recorder) {
-	// TODO(weft-chaos) : for each tenant in the scenario :
-	//   - wclient.AsTenant(name).TailAuditLog(ctx, since=lastWindow)
-	//   - for ev in result : if ev.tenant != name : rec.Record(...)
-	// The webui guarantees this property under correctly-set scope ;
-	// this invariant catches a regression where a future endpoint
-	// is exposed on the tenant portal without filtering.
-	_ = fmt.Sprintf // keep fmt live for future stringification of breaches
+// evaluate fans across tenants : one GET per tenant, walk the
+// returned events, record a Breach for every cross-tenant leak.
+func (a *AuditTenantIsolation) evaluate(ctx context.Context, rec *Recorder, tenants []string, tmpl string, window time.Duration) {
+	for _, tenant := range tenants {
+		probeCtx, cancel := context.WithTimeout(ctx, window/2)
+		url := strings.ReplaceAll(tmpl, "{tenant}", tenant)
+		body, err := a.Client.FetchJSON(probeCtx, url)
+		cancel()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			rec.Record(Breach{
+				Invariant: a.Spec.Name,
+				Kind:      a.Spec.Kind,
+				At:        time.Now().UTC(),
+				Detail:    fmt.Sprintf("fetch %s: %s", url, err),
+				TenantsInvolved: []string{tenant},
+			})
+			continue
+		}
+		var events []auditEvent
+		if err := json.Unmarshal(body, &events); err != nil {
+			rec.Record(Breach{
+				Invariant: a.Spec.Name,
+				Kind:      a.Spec.Kind,
+				At:        time.Now().UTC(),
+				Detail:    fmt.Sprintf("decode %s: %s", url, err),
+				TenantsInvolved: []string{tenant},
+			})
+			continue
+		}
+		for _, ev := range events {
+			if ev.Tenant == "" || ev.Tenant == tenant {
+				continue
+			}
+			rec.Record(Breach{
+				Invariant: a.Spec.Name,
+				Kind:      a.Spec.Kind,
+				At:        time.Now().UTC(),
+				Detail: fmt.Sprintf("tenant %q saw event id=%q from tenant %q (action=%q)",
+					tenant, ev.ID, ev.Tenant, ev.Action),
+				TenantsInvolved: []string{tenant, ev.Tenant},
+			})
+		}
+	}
+}
+
+// parseCSV is the same shape as parseURLs in healthy_endpoint.go but
+// kept local so the two invariants stay independent.
+func parseCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	out := make([]string, 0, 4)
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

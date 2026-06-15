@@ -77,6 +77,10 @@ injector "kill-dc2-agent" {
 invariant "no_cross_tenant_audit_leak" {
   kind   = "audit_tenant_isolation"
   window = "30s"
+  params = {
+    tenants      = "acme,globex,initech"
+    url_template = "https://weft.example.com/api/v1/audit-log?tenant={tenant}"
+  }
 }
 
 invariant "endpoints_alive" {
