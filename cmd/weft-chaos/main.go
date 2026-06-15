@@ -181,6 +181,9 @@ func doRun(rf *runFlags) error {
 	if err != nil {
 		return err
 	}
+	if err := sc.Validate(); err != nil {
+		return err
+	}
 	logger.Info("scenario loaded",
 		"workloads", len(sc.Workloads),
 		"injectors", len(sc.Injectors),

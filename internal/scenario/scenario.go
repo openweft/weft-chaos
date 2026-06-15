@@ -40,6 +40,9 @@ import (
 // Load parses the scenario.hcl at path into a typed Scenario.
 // Errors surface the HCL diagnostic verbatim — the operator wants
 // to see "line 17: undefined block kind" not a generic wrapper.
+//
+// Load is syntax-only ; semantic validation lives in Validate so a
+// `plan` subcommand can still parse an incomplete draft.
 func Load(path string) (*Scenario, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("scenario: %w", err)
@@ -49,6 +52,23 @@ func Load(path string) (*Scenario, error) {
 		return nil, fmt.Errorf("scenario: parse %s: %w", path, err)
 	}
 	return &s, nil
+}
+
+// Validate enforces the rules a syntactically-clean scenario must
+// also satisfy to be runnable. The biggest footgun the chaos
+// harness can produce is a "successful" run that quietly passed
+// because no invariant was ever checked — Validate refuses that
+// shape explicitly.
+//
+// `weft-chaos run` calls Validate before touching the cluster ;
+// `weft-chaos plan` does NOT, so an operator can lint a draft
+// scenario without invariants while authoring.
+func (s *Scenario) Validate() error {
+	if len(s.Invariants) == 0 {
+		return fmt.Errorf("scenario : 0 invariants — a chaos run with no checks " +
+			"would always report success ; add at least one invariant block")
+	}
+	return nil
 }
 
 // Scenario is the parsed top-level document.
