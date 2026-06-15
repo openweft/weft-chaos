@@ -64,6 +64,22 @@ func TestBuildInvariants_UnknownKindRejected(t *testing.T) {
 	}
 }
 
+func TestBuildInjectors_ProcessKillWired(t *testing.T) {
+	sc := &scenario.Scenario{
+		Injectors: []scenario.Injector{
+			{Name: "kill-agent", Kind: "process_kill",
+				Selector: "az=dc2", AtOffset: "1s", RecoverAt: "2s"},
+		},
+	}
+	list, err := buildInjectors(sc, wclient.New(nullLogger()), nullLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].inj.Name() != "kill-agent" {
+		t.Errorf("buildInjectors process_kill mis-wired : %+v", list)
+	}
+}
+
 func TestBuildInjectors_NetworkPartitionWired(t *testing.T) {
 	sc := &scenario.Scenario{
 		Injectors: []scenario.Injector{

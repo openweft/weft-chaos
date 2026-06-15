@@ -25,8 +25,8 @@ func TestLoad_ExampleScenarioParses(t *testing.T) {
 	if len(sc.Workloads) != 3 {
 		t.Errorf("workloads = %d, want 3 (acme + globex + initech)", len(sc.Workloads))
 	}
-	if len(sc.Injectors) != 2 {
-		t.Errorf("injectors = %d, want 2 (dc2-cordon + dc2-partition)", len(sc.Injectors))
+	if len(sc.Injectors) != 3 {
+		t.Errorf("injectors = %d, want 3 (cordon + partition + kill-agent)", len(sc.Injectors))
 	}
 	if len(sc.Invariants) != 4 {
 		t.Errorf("invariants = %d, want 4 (audit + endpoints + zombies + bus drops)", len(sc.Invariants))

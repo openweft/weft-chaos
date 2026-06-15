@@ -214,8 +214,10 @@ func buildInjectors(sc *scenario.Scenario, client *wclient.Client, logger *slog.
 			typed = &injectors.HostCordon{Spec: i, Logger: logger}
 		case "network_partition":
 			typed = &injectors.NetworkPartition{Spec: i, Logger: logger}
+		case "process_kill":
+			typed = &injectors.ProcessKill{Spec: i, Logger: logger}
 		default:
-			return nil, fmt.Errorf("injector %q: unknown kind %q (known: host_cordon, network_partition)", i.Name, i.Kind)
+			return nil, fmt.Errorf("injector %q: unknown kind %q (known: host_cordon, network_partition, process_kill)", i.Name, i.Kind)
 		}
 		out = append(out, scheduledInjector{
 			inj: typed, atOffset: at, recoverAt: recover, hasRecover: i.RecoverAt != "",

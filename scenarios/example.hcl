@@ -58,6 +58,20 @@ injector "dc2-partition" {
   }
 }
 
+# SIGKILL weft-agent on every dc2 host at t=25m. Forces ElectionPool
+# re-election + cross-host VM claim ; the supervisor (systemd) brings
+# weft-agent back inside its WatchdogSec window so this is bounded.
+injector "kill-dc2-agent" {
+  kind       = "process_kill"
+  selector   = "az=dc2"
+  at_offset  = "25m"
+  recover_at = "26m"
+  params = {
+    target = "weft-agent"
+    signal = "KILL"
+  }
+}
+
 # ---- Invariants : continuous correctness checks ----------------
 
 invariant "no_cross_tenant_audit_leak" {
