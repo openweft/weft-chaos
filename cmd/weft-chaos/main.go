@@ -67,10 +67,11 @@ func run() error {
 		duration   = flag.Duration("duration", 30*time.Minute, "total runtime ; injectors + workloads stop at the deadline + invariants drain")
 		dryRun     = flag.Bool("dry-run", false, "parse the scenario, print the execution plan, exit without touching the cluster")
 		yolo       = flag.Bool("i-know-what-im-doing", false, "override the production = true guard in cluster.hcl ; never set this by default")
-		reportPath = flag.String("report", "weft-chaos-report.json", "path to the JSON timeline report written at exit")
-		portalURL  = flag.String("portal-url", "", "base URL of the weft cluster portal (e.g. https://weft.example.com) ; empty = dispatchOne short-circuits to no-op")
-		token      = flag.String("token", "", "bearer token sent on resource calls ; empty = no Authorization header")
-		showVer    = flag.Bool("version", false, "print version + commit + build date, then exit")
+		reportPath     = flag.String("report", "weft-chaos-report.json", "path to the JSON timeline report written at exit")
+		portalURL      = flag.String("portal-url", "", "base URL of the weft cluster portal (e.g. https://weft.example.com) ; empty = dispatchOne short-circuits to no-op")
+		token          = flag.String("token", "", "bearer token sent on resource calls ; empty = no Authorization header")
+		metricsListen  = flag.String("metrics-listen", "", "host:port to serve /metrics on (e.g. :7771) ; empty = no listener")
+		showVer        = flag.Bool("version", false, "print version + commit + build date, then exit")
 	)
 	flag.Parse()
 	if *showVer {
@@ -131,6 +132,18 @@ func run() error {
 	}
 
 	metricsSet := metrics.New()
+	if *metricsListen != "" {
+		addr, stop, err := metricsSet.ServeBackground(*metricsListen)
+		if err != nil {
+			return fmt.Errorf("metrics listener : %w", err)
+		}
+		logger.Info("metrics listener up", "addr", addr)
+		defer func() {
+			if err := stop(context.Background()); err != nil {
+				logger.Warn("metrics shutdown error", "err", err.Error())
+			}
+		}()
+	}
 
 	return orchestrate.Run(runCtx, orchestrate.Options{
 		Scenario:     sc,
