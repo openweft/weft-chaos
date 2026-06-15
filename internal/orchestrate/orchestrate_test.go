@@ -64,6 +64,38 @@ func TestBuildInvariants_UnknownKindRejected(t *testing.T) {
 	}
 }
 
+func TestBuildInjectors_NetworkPartitionWired(t *testing.T) {
+	sc := &scenario.Scenario{
+		Injectors: []scenario.Injector{
+			{Name: "dc2-isolated", Kind: "network_partition",
+				Selector: "az=dc2", AtOffset: "1s", RecoverAt: "2s"},
+		},
+	}
+	list, err := buildInjectors(sc, wclient.New(nullLogger()), nullLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].inj.Name() != "dc2-isolated" {
+		t.Errorf("buildInjectors network_partition mis-wired : %+v", list)
+	}
+}
+
+func TestBuildInvariants_ZombiesZeroWired(t *testing.T) {
+	sc := &scenario.Scenario{
+		Invariants: []scenario.Invariant{
+			{Name: "zombies", Kind: "zombies_zero", Window: "1s",
+				Params: map[string]string{"url": "http://localhost:7770/metrics"}},
+		},
+	}
+	list, err := buildInvariants(sc, wclient.New(nullLogger()), nullLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].Name() != "zombies" {
+		t.Errorf("buildInvariants zombies_zero mis-wired : %+v", list)
+	}
+}
+
 func TestBuildInvariants_HealthyEndpointWired(t *testing.T) {
 	sc := &scenario.Scenario{
 		Invariants: []scenario.Invariant{

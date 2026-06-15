@@ -45,6 +45,19 @@ injector "dc2-cordon" {
   recover_at = "15m"
 }
 
+# WireGuard mesh drop : every packet from dc2 to dc1+dc3 is silently
+# dropped between t=20m and t=22m. Probes the federation peer state
+# machine + the etcd quorum behaviour during a real partition.
+injector "dc2-partition" {
+  kind       = "network_partition"
+  selector   = "az=dc2"
+  at_offset  = "20m"
+  recover_at = "22m"
+  params = {
+    mode = "drop"
+  }
+}
+
 # ---- Invariants : continuous correctness checks ----------------
 
 invariant "no_cross_tenant_audit_leak" {
@@ -57,5 +70,18 @@ invariant "endpoints_alive" {
   window = "10s"
   params = {
     urls = "https://weft.example.com/api/healthz,https://infra.weft.example.com/api/healthz"
+  }
+}
+
+# Zombie VMs : weft v0.4.12+ publishes `weft_vm_zombies` from the
+# ZombieGC reconciler. Any non-zero reading during a chaos run is
+# already informative ; >0 between rounds is an unambiguous bug.
+invariant "no_zombie_vms" {
+  kind   = "zombies_zero"
+  window = "30s"
+  params = {
+    url       = "https://weft.example.com/metrics"
+    threshold = "0"
+    metric    = "weft_vm_zombies"
   }
 }

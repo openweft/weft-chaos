@@ -54,6 +54,72 @@ func TestHealthz_UnreachableServerIsError(t *testing.T) {
 	}
 }
 
+func TestScrapeMetric_ReturnsValue(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("# HELP weft_vm_zombies number of zombie VMs\n# TYPE weft_vm_zombies gauge\nweft_vm_zombies 3\n"))
+	}))
+	t.Cleanup(srv.Close)
+	c := New(nullLogger())
+	v, err := c.ScrapeMetric(context.Background(), srv.URL+"/metrics", "weft_vm_zombies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != 3 {
+		t.Errorf("ScrapeMetric = %v, want 3", v)
+	}
+}
+
+func TestScrapeMetric_SumsAcrossLabels(t *testing.T) {
+	// A label-instrumented counter is the common shape in
+	// weft-webui (audit_events_total{action,result}). The parser
+	// sums across all permutations so the caller doesn't have to
+	// enumerate them.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`weft_webui_audit_events_total{action="az",result="ok"} 4
+weft_webui_audit_events_total{action="auth",result="error"} 2
+weft_webui_audit_events_total{action="rack",result="ok"} 1
+`))
+	}))
+	t.Cleanup(srv.Close)
+	c := New(nullLogger())
+	v, err := c.ScrapeMetric(context.Background(), srv.URL+"/metrics", "weft_webui_audit_events_total")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != 7 {
+		t.Errorf("ScrapeMetric sum = %v, want 7", v)
+	}
+}
+
+func TestScrapeMetric_MissingMetricErr(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("# nothing useful here\nsome_other_metric 0\n"))
+	}))
+	t.Cleanup(srv.Close)
+	c := New(nullLogger())
+	_, err := c.ScrapeMetric(context.Background(), srv.URL+"/metrics", "weft_vm_zombies")
+	if err == nil {
+		t.Fatal("ScrapeMetric on missing metric = nil err, want ErrMetricNotFound")
+	}
+	if err != ErrMetricNotFound && !strings.Contains(err.Error(), "not found") {
+		t.Errorf("err = %v, want ErrMetricNotFound", err)
+	}
+}
+
+func TestScrapeMetric_IgnoresPrefixCollision(t *testing.T) {
+	// `weft_vm_zombies_total` must NOT be picked up when we ask
+	// for `weft_vm_zombies` (different metric, prefix collision).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("weft_vm_zombies_total 99\n"))
+	}))
+	t.Cleanup(srv.Close)
+	c := New(nullLogger())
+	_, err := c.ScrapeMetric(context.Background(), srv.URL+"/metrics", "weft_vm_zombies")
+	if err != ErrMetricNotFound {
+		t.Errorf("got %v, want ErrMetricNotFound on prefix-collision-only", err)
+	}
+}
+
 func TestHealthz_ContextCancelAborts(t *testing.T) {
 	// A server that never responds — Healthz must respect the
 	// caller's cancelled context rather than hang on the

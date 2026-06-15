@@ -212,8 +212,10 @@ func buildInjectors(sc *scenario.Scenario, client *wclient.Client, logger *slog.
 		switch i.Kind {
 		case "host_cordon":
 			typed = &injectors.HostCordon{Spec: i, Logger: logger}
+		case "network_partition":
+			typed = &injectors.NetworkPartition{Spec: i, Logger: logger}
 		default:
-			return nil, fmt.Errorf("injector %q: unknown kind %q (known: host_cordon)", i.Name, i.Kind)
+			return nil, fmt.Errorf("injector %q: unknown kind %q (known: host_cordon, network_partition)", i.Name, i.Kind)
 		}
 		out = append(out, scheduledInjector{
 			inj: typed, atOffset: at, recoverAt: recover, hasRecover: i.RecoverAt != "",
@@ -237,8 +239,10 @@ func buildInvariants(sc *scenario.Scenario, client *wclient.Client, logger *slog
 			typed = &invariants.HealthyEndpoint{Spec: v, Logger: logger, Client: client}
 		case "audit_tenant_isolation":
 			typed = &invariants.AuditTenantIsolation{Spec: v, Logger: logger}
+		case "zombies_zero":
+			typed = &invariants.ZombiesZero{Spec: v, Logger: logger, Client: client}
 		default:
-			return nil, fmt.Errorf("invariant %q: unknown kind %q (known: healthy_endpoint, audit_tenant_isolation)", v.Name, v.Kind)
+			return nil, fmt.Errorf("invariant %q: unknown kind %q (known: healthy_endpoint, audit_tenant_isolation, zombies_zero)", v.Name, v.Kind)
 		}
 		out = append(out, typed)
 	}

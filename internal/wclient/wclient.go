@@ -16,8 +16,11 @@ package wclient
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -80,6 +83,98 @@ func (c *Client) Healthz(ctx context.Context, url string) error {
 		return fmt.Errorf("healthz %s: status %d", url, resp.StatusCode)
 	}
 	return nil
+}
+
+// ScrapeMetric pulls a Prometheus text-format /metrics page from
+// the given URL + returns the value of the named metric. Used by
+// invariants that watch gauges or counters from weft / weft-webui
+// (zombies_zero, bus_drops_zero, auth_throttle_locked, …).
+//
+// Bare-bones parser : matches the metric name as a line prefix,
+// strips optional `{labels}`, returns the first matching sample's
+// value. Doesn't aggregate across labels — most weft gauges are
+// label-free or the caller passes the metric+labels (e.g.
+// `weft_webui_auth_throttle_locked`) as one identifier.
+//
+// Returns ErrMetricNotFound when the metric isn't in the page —
+// distinguishable from a network error so a scraper can tell
+// "endpoint reachable but metric absent" from "endpoint down".
+func (c *Client) ScrapeMetric(ctx context.Context, url, metric string) (float64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, fmt.Errorf("new request: %w", err)
+	}
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("scrape %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("scrape %s: status %d", url, resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("scrape %s: read: %w", url, err)
+	}
+	return parseMetric(body, metric)
+}
+
+// ErrMetricNotFound is returned by ScrapeMetric when the page
+// parsed cleanly but doesn't contain the named metric. Lets the
+// caller distinguish absence (which may be normal) from a
+// connection error (which is always alarming).
+var ErrMetricNotFound = fmt.Errorf("metric not found in /metrics page")
+
+// parseMetric walks the Prometheus text-format body line by line
+// looking for one whose first whitespace-delimited token is the
+// metric name (with optional {labels} suffix) and returns its
+// value. Sums across all matching label-permutations so a
+// label-instrumented counter like `events_total{action=…}` works
+// without the caller spelling each combination.
+func parseMetric(body []byte, metric string) (float64, error) {
+	var total float64
+	var found bool
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] == '#' {
+			continue
+		}
+		// Match either `metric value` or `metric{labels} value`.
+		if !strings.HasPrefix(line, metric) {
+			continue
+		}
+		rest := line[len(metric):]
+		// Reject `metric_x` when we wanted `metric` — the next char
+		// must be space, brace, or end-of-line.
+		if rest != "" && rest[0] != ' ' && rest[0] != '{' && rest[0] != '\t' {
+			continue
+		}
+		// Strip the optional {label,…} block.
+		if strings.HasPrefix(rest, "{") {
+			end := strings.IndexByte(rest, '}')
+			if end < 0 {
+				continue
+			}
+			rest = rest[end+1:]
+		}
+		// rest now starts with whitespace + the value + optionally
+		// a timestamp. ParseFloat tolerates the trailing junk
+		// when we hand it just the value field.
+		fields := strings.Fields(rest)
+		if len(fields) == 0 {
+			continue
+		}
+		v, err := strconv.ParseFloat(fields[0], 64)
+		if err != nil {
+			continue
+		}
+		total += v
+		found = true
+	}
+	if !found {
+		return 0, ErrMetricNotFound
+	}
+	return total, nil
 }
 
 // AsTenant returns a sub-client bound to one tenant's portal — the
