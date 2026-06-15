@@ -1,40 +1,32 @@
 // Command weft-chaos drives a live openweft cluster with deterministic
 // + random churn to surface dynamic-state bugs.
 //
-// What it does :
+// Verbs (cobra) :
 //
-//   - Pulls a scenario.hcl that lists workloads (per-tenant CRUD
-//     drivers), injectors (DC-down / network-partition / disk-pressure
-//     / kill-pid / etcd-evict), and invariants (vm_count_consistent /
-//     no_cross_tenant_audit_leak / scheduling_compliant_within_60s).
-//   - Spins per-workload goroutines that hit /api/* in the configured
-//     pattern (steady-state RPS, burst, slow-cook).
-//   - Triggers injectors on the configured schedule.
-//   - Polls /metrics + /api/audit-log to evaluate invariants
-//     continuously.
-//   - Emits a timeline report — breaches highlighted, blast radius
-//     scoped per tenant.
+//	weft-chaos run     drive the cluster + write the timeline report
+//	weft-chaos plan    parse the scenario, print the plan, exit clean
+//	weft-chaos version print version + commit + build date
 //
-// Pattern : pure-Go, CGO=0, ships as a 4-arch OCI image consumed by
-// `weft microvm pull` like every other openweft binary. Mirrors the
-// weft-router cmd/main.go skeleton ; the operator UX is identical
-// across the repos.
+// Pattern : pure-Go, CGO=0, ships as a 4-arch OCI image. Mirrors the
+// weft-router cmd/main.go skeleton ; UX is identical across openweft
+// CLIs (cobra subcommands + Aliases on ls).
 //
-// Safety : refuses to run against a cluster whose `cluster.hcl` has
+// Safety : refuses to run against a cluster whose cluster.hcl carries
 // `production = true` unless --i-know-what-im-doing is set. Every
-// destructive injector logs an audit-style event so the cluster's
-// own audit log records the chaos.
+// destructive injector logs an audit-style event so the cluster's own
+// audit log records the chaos.
 package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/openweft/weft-chaos/internal/cluster"
 	"github.com/openweft/weft-chaos/internal/metrics"
@@ -53,41 +45,120 @@ var (
 )
 
 func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "weft-chaos:", err)
+	if err := newRootCmd().Execute(); err != nil {
 		os.Exit(1)
 	}
 }
 
-func run() error {
+// newRootCmd builds the `weft-chaos` cobra root + attaches every
+// subcommand. Factored so tests can inspect the wire-up without
+// invoking the real main().
+func newRootCmd() *cobra.Command {
+	root := &cobra.Command{
+		Use:   "weft-chaos",
+		Short: "Drive an openweft cluster with churn + watch invariants",
+		Long: "weft-chaos drives a live openweft cluster with deterministic + random " +
+			"churn (creation/destruction across resources, multi-tenant, AZ partitions) " +
+			"to surface dynamic-state bugs.",
+		SilenceUsage:  true,
+		SilenceErrors: false,
+	}
+	root.AddCommand(newRunCmd())
+	root.AddCommand(newPlanCmd())
+	root.AddCommand(newVersionCmd())
+	return root
+}
+
+// runFlags holds the bag of options shared by `run` ; defaults are
+// applied via cobra's StringVarP / DurationVarP.
+type runFlags struct {
+	clusterPath   string
+	scenarioPath  string
+	duration      time.Duration
+	yolo          bool
+	reportPath    string
+	portalURL     string
+	token         string
+	metricsListen string
+}
+
+func newRunCmd() *cobra.Command {
+	rf := &runFlags{}
+	cmd := &cobra.Command{
+		Use:   "run",
+		Short: "Drive the cluster + write the timeline report at exit",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return doRun(rf)
+		},
+	}
+	cmd.Flags().StringVar(&rf.clusterPath, "cluster", "", "path to cluster.hcl (required)")
+	cmd.Flags().StringVar(&rf.scenarioPath, "scenario", "", "path to scenario.hcl describing workloads + injectors + invariants (required)")
+	cmd.Flags().DurationVar(&rf.duration, "duration", 30*time.Minute, "total runtime ; injectors + workloads stop at the deadline + invariants drain")
+	cmd.Flags().BoolVar(&rf.yolo, "i-know-what-im-doing", false, "override the production = true guard in cluster.hcl ; never set this by default")
+	cmd.Flags().StringVar(&rf.reportPath, "report", "weft-chaos-report.json", "path to the JSON timeline report written at exit")
+	cmd.Flags().StringVar(&rf.portalURL, "portal-url", "", "base URL of the weft cluster portal ; empty = use cluster.hcl portal_url")
+	cmd.Flags().StringVar(&rf.token, "token", "", "bearer token sent on resource calls ; empty = no Authorization header")
+	cmd.Flags().StringVar(&rf.metricsListen, "metrics-listen", "", "host:port to serve /metrics on (e.g. :7771) ; empty = no listener")
+	_ = cmd.MarkFlagRequired("cluster")
+	_ = cmd.MarkFlagRequired("scenario")
+	return cmd
+}
+
+func newPlanCmd() *cobra.Command {
+	var scenarioPath string
+	var clusterPath string
+	cmd := &cobra.Command{
+		Use:     "plan",
+		Aliases: []string{"validate"},
+		Short:   "Parse the scenario + cluster, print the plan, exit clean",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+			if clusterPath != "" {
+				cc, err := cluster.Load(clusterPath)
+				if err != nil {
+					return err
+				}
+				logger.Info("cluster loaded",
+					"name", cc.Name, "production", cc.Production,
+					"portal_url", cc.PortalURL)
+			}
+			sc, err := scenario.Load(scenarioPath)
+			if err != nil {
+				return err
+			}
+			logger.Info("scenario loaded",
+				"workloads", len(sc.Workloads),
+				"injectors", len(sc.Injectors),
+				"invariants", len(sc.Invariants))
+			printPlan(logger, sc)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&scenarioPath, "scenario", "", "path to scenario.hcl (required)")
+	cmd.Flags().StringVar(&clusterPath, "cluster", "", "path to cluster.hcl (optional ; parsed + summarised when provided)")
+	_ = cmd.MarkFlagRequired("scenario")
+	return cmd
+}
+
+func newVersionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print version + commit + build date",
+		Run: func(_ *cobra.Command, _ []string) {
+			fmt.Printf("weft-chaos %s (%s) built %s\n", version, commit, date)
+		},
+	}
+}
+
+// doRun is the live-cluster path : load cluster + scenario, enforce
+// the production guard, spin the orchestrator. Pure function of
+// runFlags so tests can pass an in-memory bag without parsing argv.
+func doRun(rf *runFlags) error {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
-	var (
-		clusterPath = flag.String("cluster", "", "path to cluster.hcl (required)")
-		scenarioPath = flag.String("scenario", "", "path to scenario.hcl describing workloads + injectors + invariants (required)")
-		duration   = flag.Duration("duration", 30*time.Minute, "total runtime ; injectors + workloads stop at the deadline + invariants drain")
-		dryRun     = flag.Bool("dry-run", false, "parse the scenario, print the execution plan, exit without touching the cluster")
-		yolo       = flag.Bool("i-know-what-im-doing", false, "override the production = true guard in cluster.hcl ; never set this by default")
-		reportPath     = flag.String("report", "weft-chaos-report.json", "path to the JSON timeline report written at exit")
-		portalURL      = flag.String("portal-url", "", "base URL of the weft cluster portal (e.g. https://weft.example.com) ; empty = dispatchOne short-circuits to no-op")
-		token          = flag.String("token", "", "bearer token sent on resource calls ; empty = no Authorization header")
-		metricsListen  = flag.String("metrics-listen", "", "host:port to serve /metrics on (e.g. :7771) ; empty = no listener")
-		showVer        = flag.Bool("version", false, "print version + commit + build date, then exit")
-	)
-	flag.Parse()
-	if *showVer {
-		fmt.Printf("weft-chaos %s (%s) built %s\n", version, commit, date)
-		return nil
-	}
-	if *clusterPath == "" || *scenarioPath == "" {
-		flag.Usage()
-		return fmt.Errorf("--cluster and --scenario are required")
-	}
-
 	logger.Info("weft-chaos starting",
 		"version", version, "commit", commit,
-		"cluster", *clusterPath, "scenario", *scenarioPath,
-		"duration", *duration, "dry_run", *dryRun)
+		"cluster", rf.clusterPath, "scenario", rf.scenarioPath,
+		"duration", rf.duration)
 
 	// Two-phase context : the outer is bound to SIGINT/SIGTERM so the
 	// operator can pull the plug ; the inner carries the scenario
@@ -95,12 +166,10 @@ func run() error {
 	// drain has a window before the binary exits.
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	runCtx, cancel := context.WithTimeout(rootCtx, *duration)
+	runCtx, cancel := context.WithTimeout(rootCtx, rf.duration)
 	defer cancel()
 
-	// Parse the scenario unconditionally — even live runs need the
-	// plan in hand before they touch the cluster.
-	clusterCfg, err := cluster.Load(*clusterPath)
+	clusterCfg, err := cluster.Load(rf.clusterPath)
 	if err != nil {
 		return err
 	}
@@ -108,7 +177,7 @@ func run() error {
 		"name", clusterCfg.Name,
 		"production", clusterCfg.Production,
 		"portal_url", clusterCfg.PortalURL)
-	sc, err := scenario.Load(*scenarioPath)
+	sc, err := scenario.Load(rf.scenarioPath)
 	if err != nil {
 		return err
 	}
@@ -117,15 +186,10 @@ func run() error {
 		"injectors", len(sc.Injectors),
 		"invariants", len(sc.Invariants))
 
-	if *dryRun {
-		printPlan(logger, sc)
-		return nil
-	}
-
 	// Production guard : refuse to run against a cluster marked
 	// `production = true` in cluster.hcl unless the operator
 	// explicitly passed --i-know-what-im-doing.
-	if err := clusterCfg.ConfirmDestructive(*yolo); err != nil {
+	if err := clusterCfg.ConfirmDestructive(rf.yolo); err != nil {
 		return err
 	}
 
@@ -133,26 +197,26 @@ func run() error {
 	// CLI flag still trumps the file so an operator can point a
 	// shared cluster.hcl at an alternate portal for testing.
 	resolvedPortalURL := clusterCfg.PortalURL
-	if *portalURL != "" {
-		resolvedPortalURL = *portalURL
+	if rf.portalURL != "" {
+		resolvedPortalURL = rf.portalURL
 	}
 
 	client := wclient.New(logger)
 	client.PortalURL = resolvedPortalURL
-	client.Token = *token
+	client.Token = rf.token
 	if err := client.Dial(runCtx); err != nil {
 		return fmt.Errorf("wclient: %w", err)
 	}
 
 	metricsSet := metrics.New()
-	if *metricsListen != "" {
-		addr, stop, err := metricsSet.ServeBackground(*metricsListen)
+	if rf.metricsListen != "" {
+		addr, stopFn, err := metricsSet.ServeBackground(rf.metricsListen)
 		if err != nil {
 			return fmt.Errorf("metrics listener : %w", err)
 		}
 		logger.Info("metrics listener up", "addr", addr)
 		defer func() {
-			if err := stop(context.Background()); err != nil {
+			if err := stopFn(context.Background()); err != nil {
 				logger.Warn("metrics shutdown error", "err", err.Error())
 			}
 		}()
@@ -163,9 +227,9 @@ func run() error {
 		Client:       client,
 		Metrics:      metricsSet,
 		Logger:       logger,
-		ScenarioPath: *scenarioPath,
+		ScenarioPath: rf.scenarioPath,
 		ClusterName:  clusterCfg.Name,
-		ReportPath:   *reportPath,
+		ReportPath:   rf.reportPath,
 		StartedAt:    time.Now().UTC(),
 	})
 }
