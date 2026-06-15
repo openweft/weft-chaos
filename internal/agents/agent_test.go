@@ -188,6 +188,64 @@ func TestDispatchOne_RoutesAllKnownResources(t *testing.T) {
 	}
 }
 
+func TestDispatchOne_TracksOpsAndErrors(t *testing.T) {
+	// Server returns 500 every other request → half error, half ok.
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := hits.Add(1)
+		if n%2 == 0 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	m := metrics.New()
+	client := wclient.New(nullLogger())
+	client.PortalURL = srv.URL
+	a := &Agent{
+		W: scenario.Workload{
+			Name:      "alt-fail",
+			Tenant:    "acme",
+			Resources: []string{"microvm"},
+		},
+		Logger:   nullLogger(),
+		Client:   client,
+		Dispatch: m.Dispatch,
+	}
+	for i := 0; i < 6; i++ {
+		a.dispatchOne(context.Background())
+	}
+	if a.Ops() != 6 {
+		t.Errorf("Ops = %d, want 6", a.Ops())
+	}
+	if a.Errors() != 3 {
+		t.Errorf("Errors = %d, want 3 (every other 500)", a.Errors())
+	}
+}
+
+func TestDispatchOne_UnsupportedDoesNotCountAsError(t *testing.T) {
+	// A scaffold-only resource bumps Ops but NOT Errors — the chaos
+	// run can't tell from a counter alone whether the missing driver
+	// is a bug or an intentional gap, so we don't lie about it in
+	// the report.
+	a := &Agent{
+		W:      scenario.Workload{Name: "u", Resources: []string{"bucket"}},
+		Logger: nullLogger(),
+		Client: wclient.New(nullLogger()),
+	}
+	for i := 0; i < 4; i++ {
+		a.dispatchOne(context.Background())
+	}
+	if a.Ops() != 4 {
+		t.Errorf("Ops = %d, want 4", a.Ops())
+	}
+	if a.Errors() != 0 {
+		t.Errorf("Errors = %d, want 0 (unsupported != error)", a.Errors())
+	}
+}
+
 func TestDispatchOne_UnsupportedResourceLabelsAccordingly(t *testing.T) {
 	// "bucket" + "share" + "sshkey" remain scaffold-only — the
 	// agent must still drive without panicking, but label the

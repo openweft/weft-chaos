@@ -127,13 +127,16 @@ func Run(ctx context.Context, opts Options) error {
 		ClusterName:  opts.ClusterName,
 		Invariants:   collectInvariantTimelines(opts.Scenario, rec),
 	}
-	// Build workload + injector skeleton entries from the scenario
-	// so the Summary counts match what an operator wrote — even
-	// scaffold-only injectors deserve a row.
-	for _, w := range opts.Scenario.Workloads {
-		r.Workloads = append(r.Workloads, report.WorkloadResult{
-			Name: w.Name, Tenant: w.Tenant,
-		})
+	// Build workload entries by zipping the scenario list against
+	// the live agentList — same order, same length, so we can read
+	// the atomic counters each agent kept during the run.
+	for i, w := range opts.Scenario.Workloads {
+		wr := report.WorkloadResult{Name: w.Name, Tenant: w.Tenant}
+		if i < len(agentList) {
+			wr.Ops = agentList[i].Ops()
+			wr.Errors = agentList[i].Errors()
+		}
+		r.Workloads = append(r.Workloads, wr)
 	}
 	for _, i := range opts.Scenario.Injectors {
 		r.Injectors = append(r.Injectors, report.InjectorTimeline{

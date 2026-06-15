@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -48,7 +49,20 @@ type Agent struct {
 	// dispatched is the monotonic tick count used to derive a name
 	// suffix per CREATE call + alternate verb pick.
 	dispatched int
+	// ops / errors track the per-workload totals the report writer
+	// reads at exit. Atomic so a runner introspecting from another
+	// goroutine sees a consistent value. Public accessors below.
+	ops    atomic.Int64
+	errors atomic.Int64
 }
+
+// Ops returns the total dispatch rounds this agent has attempted
+// (includes ok / error / unsupported).
+func (a *Agent) Ops() int { return int(a.ops.Load()) }
+
+// Errors returns the total dispatch rounds that failed with an
+// error from the cluster client.
+func (a *Agent) Errors() int { return int(a.errors.Load()) }
 
 // Run drives the workload at SteadyRPS, switching to BurstRPS every
 // BurstEvery for BurstFor. Cancellation drains gracefully.
@@ -121,6 +135,10 @@ func (a *Agent) dispatchOne(ctx context.Context) {
 	result := a.dispatch(ctx, resource, verb, name)
 	if a.Dispatch != nil {
 		a.Dispatch.WithLabelValues(resource, verb, result).Inc()
+	}
+	a.ops.Add(1)
+	if result == "error" {
+		a.errors.Add(1)
 	}
 }
 
