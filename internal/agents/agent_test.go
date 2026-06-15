@@ -137,16 +137,67 @@ func TestDispatchOne_RoutesVolumeResource(t *testing.T) {
 	}
 }
 
+func TestDispatchOne_RoutesAllKnownResources(t *testing.T) {
+	// Single httptest server fields every kind ; counts per-prefix
+	// so we can assert every resource hit its URL surface.
+	var counts struct {
+		sync.Mutex
+		m map[string]int
+	}
+	counts.m = map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		counts.Lock()
+		counts.m[r.URL.Path]++
+		counts.Unlock()
+		w.WriteHeader(http.StatusCreated)
+	}))
+	t.Cleanup(srv.Close)
+
+	m := metrics.New()
+	client := wclient.New(nullLogger())
+	client.PortalURL = srv.URL
+
+	for _, kind := range []string{"network", "security-group", "dns-zone"} {
+		a := &Agent{
+			W: scenario.Workload{
+				Name:      "wl-" + kind,
+				Tenant:    "acme",
+				Resources: []string{kind},
+			},
+			Logger:   nullLogger(),
+			Client:   client,
+			Dispatch: m.Dispatch,
+		}
+		a.dispatchOne(context.Background())
+		// One CREATE per kind ; bump the counter via "ok" label.
+		if got := readCounter(t, m.Dispatch, kind, "create", "ok"); got != 1 {
+			t.Errorf("%s create ok counter = %v, want 1", kind, got)
+		}
+	}
+	// Confirm each kind hit its canonical /api/v1/<plural> URL.
+	for plural, kind := range map[string]string{
+		"/api/v1/networks":        "network",
+		"/api/v1/security-groups": "security-group",
+		"/api/v1/dns-zones":       "dns-zone",
+	} {
+		counts.Lock()
+		if counts.m[plural] != 1 {
+			t.Errorf("%s (%s) hit count = %d, want 1", plural, kind, counts.m[plural])
+		}
+		counts.Unlock()
+	}
+}
+
 func TestDispatchOne_UnsupportedResourceLabelsAccordingly(t *testing.T) {
-	// "dns-zone" driver doesn't exist yet (microvm + volume do) —
-	// agent must still drive (no panic), but label the counter
-	// with result="unsupported".
+	// "bucket" + "share" + "sshkey" remain scaffold-only — the
+	// agent must still drive without panicking, but label the
+	// counter with result="unsupported".
 	m := metrics.New()
 	a := &Agent{
 		W: scenario.Workload{
-			Name:      "dns-only",
+			Name:      "bucket-only",
 			Tenant:    "initech",
-			Resources: []string{"dns-zone"},
+			Resources: []string{"bucket"},
 		},
 		Logger:   nullLogger(),
 		Client:   wclient.New(nullLogger()),
@@ -156,8 +207,8 @@ func TestDispatchOne_UnsupportedResourceLabelsAccordingly(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		a.dispatchOne(ctx)
 	}
-	c := readCounter(t, m.Dispatch, "dns-zone", "create", "unsupported") +
-		readCounter(t, m.Dispatch, "dns-zone", "delete", "unsupported")
+	c := readCounter(t, m.Dispatch, "bucket", "create", "unsupported") +
+		readCounter(t, m.Dispatch, "bucket", "delete", "unsupported")
 	if c != 3 {
 		t.Errorf("unsupported counter = %v, want 3", c)
 	}

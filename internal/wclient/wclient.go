@@ -186,85 +186,73 @@ func parseMetric(body []byte, metric string) (float64, error) {
 	return total, nil
 }
 
-// CreateMicroVM posts a minimal microVM spec to the cluster's
-// /api/v1/microvms endpoint. The tenant header gates which project
-// the new microVM lands under. With an empty PortalURL the call
-// short-circuits to nil — unit tests + dry-run smokes use this to
-// exercise the dispatch loop without needing a server.
-//
-// Body shape : {"name": "<name>", "tenant": "<tenant>"}. The real
-// weft-webui POST surface accepts a much richer block (image, kernel,
-// memory_mb, disk_gb…) ; chaos sends only the identity fields + lets
-// the cluster's defaults resolve the rest, so the harness stays
-// resilient to schema churn upstream.
+// CreateMicroVM posts a minimal microVM spec to /api/v1/microvms.
+// Body : {"name", "tenant"} ; server defaults resolve the rest
+// (image, kernel, memory_mb, disk_gb…) so chaos doesn't have to
+// track upstream schema churn. Empty PortalURL = no-op.
 func (c *Client) CreateMicroVM(ctx context.Context, tenant, name string) error {
-	if c.PortalURL == "" {
-		return nil
-	}
-	body, _ := json.Marshal(map[string]string{"name": name, "tenant": tenant})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.PortalURL+"/api/v1/microvms", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create microvm: new request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("create microvm %s/%s: %w", tenant, name, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("create microvm %s/%s: status %d", tenant, name, resp.StatusCode)
-	}
-	return nil
+	return c.createResource(ctx, "microvms", tenant, name)
 }
 
-// DeleteMicroVM symmetrically removes a microVM by tenant+name.
-// Empty PortalURL = no-op, same rationale as CreateMicroVM.
+// DeleteMicroVM removes a microVM by tenant+name. 404 is idempotent
+// so chaos may issue duplicate deletes harmlessly.
 func (c *Client) DeleteMicroVM(ctx context.Context, tenant, name string) error {
-	if c.PortalURL == "" {
-		return nil
-	}
-	url := fmt.Sprintf("%s/api/v1/microvms/%s/%s", c.PortalURL, tenant, name)
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
-	if err != nil {
-		return fmt.Errorf("delete microvm: new request: %w", err)
-	}
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("delete microvm %s/%s: %w", tenant, name, err)
-	}
-	defer resp.Body.Close()
-	// 404 is fine — chaos may try to delete the same name twice ;
-	// idempotence is the kindness the operator deserves.
-	if resp.StatusCode == http.StatusNotFound {
-		return nil
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("delete microvm %s/%s: status %d", tenant, name, resp.StatusCode)
-	}
-	return nil
+	return c.deleteResource(ctx, "microvms", tenant, name)
 }
 
-// CreateVolume posts a minimal volume spec to the cluster's
-// /api/v1/volumes endpoint. Same shape contract as CreateMicroVM :
-// {"name", "tenant"}, server fills defaults (size_gb, backend, …).
-// Empty PortalURL = no-op.
+// CreateVolume posts a minimal volume spec to /api/v1/volumes.
 func (c *Client) CreateVolume(ctx context.Context, tenant, name string) error {
+	return c.createResource(ctx, "volumes", tenant, name)
+}
+
+// DeleteVolume removes a volume.
+func (c *Client) DeleteVolume(ctx context.Context, tenant, name string) error {
+	return c.deleteResource(ctx, "volumes", tenant, name)
+}
+
+// CreateNetwork posts a minimal subnet spec to /api/v1/networks.
+func (c *Client) CreateNetwork(ctx context.Context, tenant, name string) error {
+	return c.createResource(ctx, "networks", tenant, name)
+}
+
+// DeleteNetwork removes a subnet.
+func (c *Client) DeleteNetwork(ctx context.Context, tenant, name string) error {
+	return c.deleteResource(ctx, "networks", tenant, name)
+}
+
+// CreateSecurityGroup posts a minimal SG spec to /api/v1/security-groups.
+func (c *Client) CreateSecurityGroup(ctx context.Context, tenant, name string) error {
+	return c.createResource(ctx, "security-groups", tenant, name)
+}
+
+// DeleteSecurityGroup removes a security group.
+func (c *Client) DeleteSecurityGroup(ctx context.Context, tenant, name string) error {
+	return c.deleteResource(ctx, "security-groups", tenant, name)
+}
+
+// CreateDNSZone posts a minimal DNS-zone spec to /api/v1/dns-zones.
+func (c *Client) CreateDNSZone(ctx context.Context, tenant, name string) error {
+	return c.createResource(ctx, "dns-zones", tenant, name)
+}
+
+// DeleteDNSZone removes a DNS zone.
+func (c *Client) DeleteDNSZone(ctx context.Context, tenant, name string) error {
+	return c.deleteResource(ctx, "dns-zones", tenant, name)
+}
+
+// createResource is the shared POST path : marshals the identity
+// JSON, attaches auth, returns wrapped errors. `plural` is the
+// URL segment ("microvms", "volumes", "networks", …) ; the call
+// sites pass the canonical pluralisation.
+func (c *Client) createResource(ctx context.Context, plural, tenant, name string) error {
 	if c.PortalURL == "" {
 		return nil
 	}
 	body, _ := json.Marshal(map[string]string{"name": name, "tenant": tenant})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.PortalURL+"/api/v1/volumes", bytes.NewReader(body))
+	url := fmt.Sprintf("%s/api/v1/%s", c.PortalURL, plural)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create volume: new request: %w", err)
+		return fmt.Errorf("create %s: new request: %w", plural, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.Token != "" {
@@ -272,38 +260,39 @@ func (c *Client) CreateVolume(ctx context.Context, tenant, name string) error {
 	}
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("create volume %s/%s: %w", tenant, name, err)
+		return fmt.Errorf("create %s %s/%s: %w", plural, tenant, name, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("create volume %s/%s: status %d", tenant, name, resp.StatusCode)
+		return fmt.Errorf("create %s %s/%s: status %d", plural, tenant, name, resp.StatusCode)
 	}
 	return nil
 }
 
-// DeleteVolume symmetrically removes a volume. 404 is idempotent.
-func (c *Client) DeleteVolume(ctx context.Context, tenant, name string) error {
+// deleteResource is the shared DELETE path. 404 is treated as
+// success (idempotence — chaos may double-delete).
+func (c *Client) deleteResource(ctx context.Context, plural, tenant, name string) error {
 	if c.PortalURL == "" {
 		return nil
 	}
-	url := fmt.Sprintf("%s/api/v1/volumes/%s/%s", c.PortalURL, tenant, name)
+	url := fmt.Sprintf("%s/api/v1/%s/%s/%s", c.PortalURL, plural, tenant, name)
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
 	if err != nil {
-		return fmt.Errorf("delete volume: new request: %w", err)
+		return fmt.Errorf("delete %s: new request: %w", plural, err)
 	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("delete volume %s/%s: %w", tenant, name, err)
+		return fmt.Errorf("delete %s %s/%s: %w", plural, tenant, name, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
 		return nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("delete volume %s/%s: status %d", tenant, name, resp.StatusCode)
+		return fmt.Errorf("delete %s %s/%s: status %d", plural, tenant, name, resp.StatusCode)
 	}
 	return nil
 }

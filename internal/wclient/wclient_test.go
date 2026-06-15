@@ -273,6 +273,62 @@ func TestDeleteVolume_PathShape(t *testing.T) {
 	}
 }
 
+// TestResourceDrivers_AllRouteToCorrectPath drives every CRUD
+// driver against a single httptest server + asserts the path
+// matches the canonical pluralisation. Adding a new driver
+// without updating this table catches a missing path immediately.
+func TestResourceDrivers_AllRouteToCorrectPath(t *testing.T) {
+	cases := []struct {
+		name   string
+		path   string
+		create func(*Client, context.Context, string, string) error
+		delete func(*Client, context.Context, string, string) error
+	}{
+		{"microvm", "microvms",
+			(*Client).CreateMicroVM, (*Client).DeleteMicroVM},
+		{"volume", "volumes",
+			(*Client).CreateVolume, (*Client).DeleteVolume},
+		{"network", "networks",
+			(*Client).CreateNetwork, (*Client).DeleteNetwork},
+		{"security-group", "security-groups",
+			(*Client).CreateSecurityGroup, (*Client).DeleteSecurityGroup},
+		{"dns-zone", "dns-zones",
+			(*Client).CreateDNSZone, (*Client).DeleteDNSZone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotPostPath, gotDelPath string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case http.MethodPost:
+					gotPostPath = r.URL.Path
+					w.WriteHeader(http.StatusCreated)
+				case http.MethodDelete:
+					gotDelPath = r.URL.Path
+					w.WriteHeader(http.StatusOK)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			c := New(nullLogger())
+			c.PortalURL = srv.URL
+			if err := tc.create(c, context.Background(), "acme", "x"); err != nil {
+				t.Fatalf("create : %v", err)
+			}
+			if err := tc.delete(c, context.Background(), "acme", "x"); err != nil {
+				t.Fatalf("delete : %v", err)
+			}
+			wantPost := "/api/v1/" + tc.path
+			wantDel := "/api/v1/" + tc.path + "/acme/x"
+			if gotPostPath != wantPost {
+				t.Errorf("POST path = %q, want %q", gotPostPath, wantPost)
+			}
+			if gotDelPath != wantDel {
+				t.Errorf("DELETE path = %q, want %q", gotDelPath, wantDel)
+			}
+		})
+	}
+}
+
 func TestHealthz_ContextCancelAborts(t *testing.T) {
 	// A server that never responds — Healthz must respect the
 	// caller's cancelled context rather than hang on the

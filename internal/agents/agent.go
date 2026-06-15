@@ -143,6 +143,27 @@ func (a *Agent) dispatch(ctx context.Context, resource, verb, name string) strin
 		case "delete":
 			err = a.Client.DeleteVolume(ctx, a.W.Tenant, name)
 		}
+	case "network":
+		switch verb {
+		case "create":
+			err = a.Client.CreateNetwork(ctx, a.W.Tenant, name)
+		case "delete":
+			err = a.Client.DeleteNetwork(ctx, a.W.Tenant, name)
+		}
+	case "security-group":
+		switch verb {
+		case "create":
+			err = a.Client.CreateSecurityGroup(ctx, a.W.Tenant, name)
+		case "delete":
+			err = a.Client.DeleteSecurityGroup(ctx, a.W.Tenant, name)
+		}
+	case "dns-zone":
+		switch verb {
+		case "create":
+			err = a.Client.CreateDNSZone(ctx, a.W.Tenant, name)
+		case "delete":
+			err = a.Client.DeleteDNSZone(ctx, a.W.Tenant, name)
+		}
 	default:
 		// Driver not yet implemented for this resource kind. The
 		// counter records "unsupported" so an operator can see how
