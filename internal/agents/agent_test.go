@@ -271,15 +271,16 @@ func TestSupportedResources_DispatchHonoursTheClaim(t *testing.T) {
 }
 
 func TestDispatchOne_UnsupportedResourceLabelsAccordingly(t *testing.T) {
-	// "bucket" + "share" + "sshkey" remain scaffold-only — the
-	// agent must still drive without panicking, but label the
-	// counter with result="unsupported".
+	// Genuinely-unknown resource kind — agent must still drive
+	// without panicking + label the counter with result="unsupported"
+	// so an operator scrubbing a typo at `weft-chaos plan` time sees
+	// the gap. "future-kind" is reserved as a never-supported kind.
 	m := metrics.New()
 	a := &Agent{
 		W: scenario.Workload{
-			Name:      "bucket-only",
+			Name:      "future-only",
 			Tenant:    "initech",
-			Resources: []string{"bucket"},
+			Resources: []string{"future-kind"},
 		},
 		Logger:   nullLogger(),
 		Client:   wclient.New(nullLogger()),
@@ -289,8 +290,8 @@ func TestDispatchOne_UnsupportedResourceLabelsAccordingly(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		a.dispatchOne(ctx)
 	}
-	c := readCounter(t, m.Dispatch, "bucket", "create", "unsupported") +
-		readCounter(t, m.Dispatch, "bucket", "delete", "unsupported")
+	c := readCounter(t, m.Dispatch, "future-kind", "create", "unsupported") +
+		readCounter(t, m.Dispatch, "future-kind", "delete", "unsupported")
 	if c != 3 {
 		t.Errorf("unsupported counter = %v, want 3", c)
 	}

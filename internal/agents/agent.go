@@ -182,6 +182,41 @@ func (a *Agent) dispatch(ctx context.Context, resource, verb, name string) strin
 		case "delete":
 			err = a.Client.DeleteDNSZone(ctx, a.W.Tenant, name)
 		}
+	case "dns-record":
+		switch verb {
+		case "create":
+			err = a.Client.CreateDNSRecord(ctx, a.W.Tenant, name)
+		case "delete":
+			err = a.Client.DeleteDNSRecord(ctx, a.W.Tenant, name)
+		}
+	case "loadbalancer":
+		switch verb {
+		case "create":
+			err = a.Client.CreateLoadBalancer(ctx, a.W.Tenant, name)
+		case "delete":
+			err = a.Client.DeleteLoadBalancer(ctx, a.W.Tenant, name)
+		}
+	case "bucket":
+		switch verb {
+		case "create":
+			err = a.Client.CreateBucket(ctx, a.W.Tenant, name)
+		case "delete":
+			err = a.Client.DeleteBucket(ctx, a.W.Tenant, name)
+		}
+	case "share":
+		switch verb {
+		case "create":
+			err = a.Client.CreateShare(ctx, a.W.Tenant, name)
+		case "delete":
+			err = a.Client.DeleteShare(ctx, a.W.Tenant, name)
+		}
+	case "sshkey":
+		switch verb {
+		case "create":
+			err = a.Client.CreateSSHKey(ctx, a.W.Tenant, name)
+		case "delete":
+			err = a.Client.DeleteSSHKey(ctx, a.W.Tenant, name)
+		}
 	default:
 		// Driver not yet implemented for this resource kind. The
 		// counter records "unsupported" so an operator can see how
@@ -212,5 +247,9 @@ func max1(n int) int {
 // or driver landed in a follow-up). Must stay in lockstep with
 // the dispatch switch above.
 func SupportedResources() []string {
-	return []string{"microvm", "volume", "network", "security-group", "dns-zone"}
+	return []string{
+		"microvm", "volume", "network", "security-group",
+		"dns-zone", "dns-record", "loadbalancer",
+		"bucket", "share", "sshkey",
+	}
 }

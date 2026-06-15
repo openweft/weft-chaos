@@ -241,6 +241,63 @@ func (c *Client) DeleteDNSZone(ctx context.Context, tenant, name string) error {
 	return c.deleteResource(ctx, "dns-zones", tenant, name)
 }
 
+// CreateDNSRecord posts a DNS record spec to /api/v1/dns-records.
+func (c *Client) CreateDNSRecord(ctx context.Context, tenant, name string) error {
+	return c.createResource(ctx, "dns-records", tenant, name)
+}
+
+// DeleteDNSRecord removes a DNS record.
+func (c *Client) DeleteDNSRecord(ctx context.Context, tenant, name string) error {
+	return c.deleteResource(ctx, "dns-records", tenant, name)
+}
+
+// CreateLoadBalancer posts an L7 load-balancer spec to
+// /api/v1/loadbalancers. Caddy-backed in openweft per the router/LB
+// Go-native memory.
+func (c *Client) CreateLoadBalancer(ctx context.Context, tenant, name string) error {
+	return c.createResource(ctx, "loadbalancers", tenant, name)
+}
+
+// DeleteLoadBalancer removes a load balancer.
+func (c *Client) DeleteLoadBalancer(ctx context.Context, tenant, name string) error {
+	return c.deleteResource(ctx, "loadbalancers", tenant, name)
+}
+
+// CreateBucket posts an S3-compatible bucket spec to /api/v1/buckets.
+// Backed by versitygw or CubeFS objectnode in openweft (no MinIO
+// per the no-minio policy).
+func (c *Client) CreateBucket(ctx context.Context, tenant, name string) error {
+	return c.createResource(ctx, "buckets", tenant, name)
+}
+
+// DeleteBucket removes an S3 bucket.
+func (c *Client) DeleteBucket(ctx context.Context, tenant, name string) error {
+	return c.deleteResource(ctx, "buckets", tenant, name)
+}
+
+// CreateShare posts a POSIX/CIFS share spec to /api/v1/shares.
+// CubeFS-backed in openweft.
+func (c *Client) CreateShare(ctx context.Context, tenant, name string) error {
+	return c.createResource(ctx, "shares", tenant, name)
+}
+
+// DeleteShare removes a share.
+func (c *Client) DeleteShare(ctx context.Context, tenant, name string) error {
+	return c.deleteResource(ctx, "shares", tenant, name)
+}
+
+// CreateSSHKey posts a public-key entry to the catalogue /api/v1/sshkeys.
+// Tenant-scoped : the SSH key is bound to one project + injectable
+// into VM cloud-init via the sshkeys field of a workload spec.
+func (c *Client) CreateSSHKey(ctx context.Context, tenant, name string) error {
+	return c.createResource(ctx, "sshkeys", tenant, name)
+}
+
+// DeleteSSHKey removes an SSH key from the catalogue.
+func (c *Client) DeleteSSHKey(ctx context.Context, tenant, name string) error {
+	return c.deleteResource(ctx, "sshkeys", tenant, name)
+}
+
 // createResource is the shared POST path : marshals the identity
 // JSON, attaches auth, returns wrapped errors. `plural` is the
 // URL segment ("microvms", "volumes", "networks", …) ; the call

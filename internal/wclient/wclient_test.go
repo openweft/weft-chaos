@@ -294,6 +294,16 @@ func TestResourceDrivers_AllRouteToCorrectPath(t *testing.T) {
 			(*Client).CreateSecurityGroup, (*Client).DeleteSecurityGroup},
 		{"dns-zone", "dns-zones",
 			(*Client).CreateDNSZone, (*Client).DeleteDNSZone},
+		{"dns-record", "dns-records",
+			(*Client).CreateDNSRecord, (*Client).DeleteDNSRecord},
+		{"loadbalancer", "loadbalancers",
+			(*Client).CreateLoadBalancer, (*Client).DeleteLoadBalancer},
+		{"bucket", "buckets",
+			(*Client).CreateBucket, (*Client).DeleteBucket},
+		{"share", "shares",
+			(*Client).CreateShare, (*Client).DeleteShare},
+		{"sshkey", "sshkeys",
+			(*Client).CreateSSHKey, (*Client).DeleteSSHKey},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
