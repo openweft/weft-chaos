@@ -1,0 +1,46 @@
+version: '3'
+
+# Aligned with weft-router / weft-network / weft-webui so an
+# operator switching repos sees the same `task build` / `task test`
+# UX everywhere.
+
+vars:
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+  COMMIT:
+    sh: git rev-parse --short HEAD 2>/dev/null || echo none
+  DATE:
+    sh: date -u +%Y-%m-%dT%H:%M:%SZ
+
+tasks:
+  build:
+    desc: Build the weft-chaos binary (host arch).
+    cmds:
+      - go build -ldflags "-X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.DATE}}" -o weft-chaos ./cmd/weft-chaos
+
+  build-linux:
+    desc: Cross-build the four production targets the OCI image bundles.
+    cmds:
+      - GOOS=linux GOARCH=amd64   CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version={{.VERSION}}" -o dist/weft-chaos-linux-amd64   ./cmd/weft-chaos
+      - GOOS=linux GOARCH=arm64   CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version={{.VERSION}}" -o dist/weft-chaos-linux-arm64   ./cmd/weft-chaos
+      - GOOS=linux GOARCH=riscv64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version={{.VERSION}}" -o dist/weft-chaos-linux-riscv64 ./cmd/weft-chaos
+      - GOOS=linux GOARCH=loong64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version={{.VERSION}}" -o dist/weft-chaos-linux-loong64 ./cmd/weft-chaos
+
+  test:
+    desc: Run all Go tests with the race detector.
+    cmds:
+      - go test ./... -race
+
+  vet:
+    desc: go vet across the whole tree.
+    cmds:
+      - go vet ./...
+
+  check:
+    desc: Quick gate before a commit — vet + test.
+    deps: [vet, test]
+
+  dry-run:
+    desc: Parse + plan the example scenario without touching any cluster.
+    cmds:
+      - go run ./cmd/weft-chaos --cluster ./scenarios/example-cluster.hcl --scenario ./scenarios/example.hcl --dry-run --duration 1m
