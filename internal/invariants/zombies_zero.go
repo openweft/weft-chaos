@@ -107,6 +107,7 @@ func (z *ZombiesZero) evaluate(ctx context.Context, rec *Recorder, url, metric s
 		}
 		rec.Record(Breach{
 			Invariant: z.Spec.Name,
+			Kind:      z.Spec.Kind,
 			At:        time.Now().UTC(),
 			Detail:    detail,
 		})
@@ -115,8 +116,9 @@ func (z *ZombiesZero) evaluate(ctx context.Context, rec *Recorder, url, metric s
 	if value > threshold {
 		rec.Record(Breach{
 			Invariant: z.Spec.Name,
+			Kind:      z.Spec.Kind,
 			At:        time.Now().UTC(),
-			Detail: fmt.Sprintf("%s = %.1f > threshold %.1f", metric, value, threshold),
+			Detail:    fmt.Sprintf("%s = %.1f > threshold %.1f", metric, value, threshold),
 		})
 	}
 }

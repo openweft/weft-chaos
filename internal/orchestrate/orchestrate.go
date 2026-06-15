@@ -51,7 +51,12 @@ type Options struct {
 // completes ; returns the first error from any goroutine OR
 // from the report writer.
 func Run(ctx context.Context, opts Options) error {
-	rec := invariants.NewRecorder()
+	var rec *invariants.Recorder
+	if opts.Metrics != nil {
+		rec = invariants.NewRecorderWithCounter(opts.Metrics.Breach)
+	} else {
+		rec = invariants.NewRecorder()
+	}
 
 	// Build the runtime objects. A construction error (e.g. an
 	// invariant with bad params) is fatal — we want to fail loud

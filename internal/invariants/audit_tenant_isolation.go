@@ -29,12 +29,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/openweft/weft-chaos/internal/scenario"
 )
 
 // Breach is one logged invariant violation, surfaced in the report.
 type Breach struct {
 	Invariant string    `json:"invariant"`
+	Kind      string    `json:"kind,omitempty"`
 	At        time.Time `json:"at"`
 	Detail    string    `json:"detail"`
 	// TenantsInvolved is the set of tenant names the breach touches.
@@ -50,18 +53,32 @@ type Invariant interface {
 }
 
 // Recorder is the concurrent-safe sink the agents + invariants
-// share. The report writer reads from it at exit.
+// share. The report writer reads from it at exit. An optional
+// prometheus CounterVec mirrors every Record into a
+// weft_chaos_breach_total{invariant,kind} cell so a Grafana panel
+// can see breaches accumulating in real time alongside the cluster-
+// side metrics the harness watches.
 type Recorder struct {
-	mu      sync.Mutex
+	mu       sync.Mutex
 	breaches []Breach
+	counter  *prometheus.CounterVec
 }
 
 func NewRecorder() *Recorder { return &Recorder{} }
+
+// NewRecorderWithCounter mirrors every Record into the given
+// CounterVec. Pass nil to opt out.
+func NewRecorderWithCounter(c *prometheus.CounterVec) *Recorder {
+	return &Recorder{counter: c}
+}
 
 func (r *Recorder) Record(b Breach) {
 	r.mu.Lock()
 	r.breaches = append(r.breaches, b)
 	r.mu.Unlock()
+	if r.counter != nil {
+		r.counter.WithLabelValues(b.Invariant, b.Kind).Inc()
+	}
 }
 
 func (r *Recorder) Snapshot() []Breach {

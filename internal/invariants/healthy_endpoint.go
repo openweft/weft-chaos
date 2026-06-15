@@ -84,6 +84,7 @@ func (h *HealthyEndpoint) evaluate(ctx context.Context, rec *Recorder, urls []st
 		if err := h.Client.Healthz(probeCtx, url); err != nil {
 			rec.Record(Breach{
 				Invariant: h.Spec.Name,
+				Kind:      h.Spec.Kind,
 				At:        time.Now().UTC(),
 				Detail:    err.Error(),
 			})

@@ -117,6 +117,7 @@ func (b *BusDropsZero) evaluate(ctx context.Context, rec *Recorder, url, metric 
 		}
 		rec.Record(Breach{
 			Invariant: b.Spec.Name,
+			Kind:      b.Spec.Kind,
 			At:        time.Now().UTC(),
 			Detail:    detail,
 		})
@@ -132,6 +133,7 @@ func (b *BusDropsZero) evaluate(ctx context.Context, rec *Recorder, url, metric 
 	if delta > threshold {
 		rec.Record(Breach{
 			Invariant: b.Spec.Name,
+			Kind:      b.Spec.Kind,
 			At:        time.Now().UTC(),
 			Detail: fmt.Sprintf("%s grew by %.1f in %s (threshold %.1f)",
 				metric, delta, window, threshold),
