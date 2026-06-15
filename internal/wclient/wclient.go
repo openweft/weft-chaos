@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -323,6 +324,161 @@ func (c *Client) FetchJSON(ctx context.Context, url string) ([]byte, error) {
 		return nil, fmt.Errorf("fetch %s: status %d", url, resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
+}
+
+// Histogram is the minimal Prometheus histogram readout the
+// chaos invariants need : bucket bound → cumulative count,
+// plus the total sample count. Sum is intentionally NOT exposed
+// — invariants checking quantile ratios don't need it, and
+// adding fields invites callers to compute means that are
+// statistically meaningless without weights.
+type Histogram struct {
+	Buckets map[float64]float64 // upper-bound (le) → cumulative count
+	Count   float64             // total samples ( = bucket{le=+Inf} )
+}
+
+// ScrapeHistogram fetches a Prometheus /metrics page + extracts
+// one histogram by name. Returns ErrMetricNotFound when the page
+// has no `<metric>_count` line — distinguishable from a network
+// error so the caller can tell "endpoint reachable but no samples
+// yet" from "endpoint unreachable".
+//
+// Bucket lines look like : `<metric>_bucket{le="5"} 12`. Labels
+// other than le are tolerated but ignored — chaos doesn't slice
+// histograms by label today.
+func (c *Client) ScrapeHistogram(ctx context.Context, url, metric string) (Histogram, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return Histogram{}, fmt.Errorf("new request: %w", err)
+	}
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return Histogram{}, fmt.Errorf("scrape %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return Histogram{}, fmt.Errorf("scrape %s: status %d", url, resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return Histogram{}, fmt.Errorf("scrape %s: read: %w", url, err)
+	}
+	return parseHistogram(body, metric)
+}
+
+// parseHistogram walks the text-format body for the three pieces
+// that define a histogram : every <metric>_bucket{le="X"} line +
+// the <metric>_count line. Order in the page doesn't matter ; the
+// parser is line-oriented.
+func parseHistogram(body []byte, metric string) (Histogram, error) {
+	h := Histogram{Buckets: map[float64]float64{}}
+	bucketPrefix := metric + "_bucket"
+	countPrefix := metric + "_count"
+	var sawCount bool
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] == '#' {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, bucketPrefix):
+			// Need to ensure the next char terminates the metric name
+			// (avoids matching `<metric>_bucketwise`).
+			rest := line[len(bucketPrefix):]
+			if rest == "" || (rest[0] != '{' && rest[0] != ' ' && rest[0] != '\t') {
+				continue
+			}
+			le, value, ok := parseBucketLine(rest)
+			if !ok {
+				continue
+			}
+			h.Buckets[le] = value
+		case strings.HasPrefix(line, countPrefix):
+			rest := line[len(countPrefix):]
+			if rest == "" || (rest[0] != ' ' && rest[0] != '\t' && rest[0] != '{') {
+				continue
+			}
+			// `_count` may carry labels (rare for histograms but valid).
+			if strings.HasPrefix(rest, "{") {
+				end := strings.IndexByte(rest, '}')
+				if end < 0 {
+					continue
+				}
+				rest = rest[end+1:]
+			}
+			fields := strings.Fields(rest)
+			if len(fields) == 0 {
+				continue
+			}
+			v, err := strconv.ParseFloat(fields[0], 64)
+			if err != nil {
+				continue
+			}
+			h.Count = v
+			sawCount = true
+		}
+	}
+	if !sawCount {
+		return Histogram{}, ErrMetricNotFound
+	}
+	return h, nil
+}
+
+// parseBucketLine extracts le + value from a `_bucket{le="X",...} V`
+// line. Returns (le, value, true) on success. `+Inf` is treated as
+// math.Inf(1) so callers can sort buckets monotonically.
+func parseBucketLine(rest string) (float64, float64, bool) {
+	if !strings.HasPrefix(rest, "{") {
+		return 0, 0, false
+	}
+	end := strings.IndexByte(rest, '}')
+	if end < 0 {
+		return 0, 0, false
+	}
+	labels := rest[1:end]
+	rest = rest[end+1:]
+	// Find le="…" anywhere in the labels block.
+	le, ok := extractLabel(labels, "le")
+	if !ok {
+		return 0, 0, false
+	}
+	var leVal float64
+	if le == "+Inf" {
+		leVal = math.Inf(1)
+	} else {
+		v, err := strconv.ParseFloat(le, 64)
+		if err != nil {
+			return 0, 0, false
+		}
+		leVal = v
+	}
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return 0, 0, false
+	}
+	v, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	return leVal, v, true
+}
+
+// extractLabel pulls the value of `key="…"` out of a Prometheus
+// labels block. Returns ("", false) when the key is absent or the
+// quoting doesn't line up.
+func extractLabel(labels, key string) (string, bool) {
+	// Look for `key="`.
+	needle := key + `="`
+	idx := strings.Index(labels, needle)
+	if idx < 0 {
+		return "", false
+	}
+	start := idx + len(needle)
+	end := strings.IndexByte(labels[start:], '"')
+	if end < 0 {
+		return "", false
+	}
+	return labels[start : start+end], true
 }
 
 // AsTenant returns a sub-client bound to one tenant's portal — the

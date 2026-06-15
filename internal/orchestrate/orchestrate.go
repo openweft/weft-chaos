@@ -322,8 +322,10 @@ func buildInvariants(sc *scenario.Scenario, client *wclient.Client, logger *slog
 			typed = &invariants.ZombiesZero{Spec: v, Logger: logger, Client: client}
 		case "bus_drops_zero":
 			typed = &invariants.BusDropsZero{Spec: v, Logger: logger, Client: client}
+		case "respawn_within_sla":
+			typed = &invariants.RespawnWithinSLA{Spec: v, Logger: logger, Client: client}
 		default:
-			return nil, fmt.Errorf("invariant %q: unknown kind %q (known: healthy_endpoint, audit_tenant_isolation, zombies_zero, bus_drops_zero)", v.Name, v.Kind)
+			return nil, fmt.Errorf("invariant %q: unknown kind %q (known: healthy_endpoint, audit_tenant_isolation, zombies_zero, bus_drops_zero, respawn_within_sla)", v.Name, v.Kind)
 		}
 		out = append(out, typed)
 	}

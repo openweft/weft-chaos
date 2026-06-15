@@ -329,6 +329,70 @@ func TestResourceDrivers_AllRouteToCorrectPath(t *testing.T) {
 	}
 }
 
+func TestScrapeHistogram_ParsesBucketsAndCount(t *testing.T) {
+	body := `# HELP weft_respawn_seconds Time taken to respawn a VM
+# TYPE weft_respawn_seconds histogram
+weft_respawn_seconds_bucket{le="5"} 12
+weft_respawn_seconds_bucket{le="30"} 47
+weft_respawn_seconds_bucket{le="60"} 50
+weft_respawn_seconds_bucket{le="+Inf"} 50
+weft_respawn_seconds_sum 1250.5
+weft_respawn_seconds_count 50
+`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	c := New(nullLogger())
+	h, err := c.ScrapeHistogram(context.Background(), srv.URL+"/metrics", "weft_respawn_seconds")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Count != 50 {
+		t.Errorf("count = %v, want 50", h.Count)
+	}
+	if h.Buckets[60] != 50 {
+		t.Errorf("buckets[60] = %v, want 50", h.Buckets[60])
+	}
+	if h.Buckets[5] != 12 {
+		t.Errorf("buckets[5] = %v, want 12", h.Buckets[5])
+	}
+	// +Inf bucket should equal count.
+	for le, v := range h.Buckets {
+		if le > 1e9 && v != h.Count {
+			t.Errorf("+Inf bucket %v, want = count %v", v, h.Count)
+		}
+	}
+}
+
+func TestScrapeHistogram_MissingCountErr(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("other_metric 0\n"))
+	}))
+	t.Cleanup(srv.Close)
+	c := New(nullLogger())
+	_, err := c.ScrapeHistogram(context.Background(), srv.URL+"/metrics", "weft_respawn_seconds")
+	if err != ErrMetricNotFound {
+		t.Errorf("missing histogram = %v, want ErrMetricNotFound", err)
+	}
+}
+
+func TestScrapeHistogram_IgnoresPrefixCollision(t *testing.T) {
+	// `weft_respawn_seconds_extra_count` must NOT count as
+	// `weft_respawn_seconds_count`.
+	body := `weft_respawn_seconds_extra_count 99
+`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	c := New(nullLogger())
+	_, err := c.ScrapeHistogram(context.Background(), srv.URL+"/metrics", "weft_respawn_seconds")
+	if err != ErrMetricNotFound {
+		t.Errorf("prefix-collision-only = %v, want ErrMetricNotFound", err)
+	}
+}
+
 func TestHealthz_ContextCancelAborts(t *testing.T) {
 	// A server that never responds — Healthz must respect the
 	// caller's cancelled context rather than hang on the
