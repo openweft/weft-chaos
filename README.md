@@ -7,10 +7,10 @@ and continuously checks invariants (audit isolation, scheduling
 compliance, zombie count, event-bus drops). Emits a timeline JSON
 report flagging every breach.
 
-**Status : scaffold.** The CLI surface + the repo layout + one
-sample injector + one sample invariant are in. Per-resource agent
-drivers + the remaining injectors / invariants land as follow-up
-turns, one per commit, so each gets focused review.
+**Status : functional.** The CLI surface, repo layout, agent
+drivers for 10 resource kinds, 3 injectors and 5 invariants are
+all wired. `wclient` is a stub-with-mock-seam ; the live-cluster
+gRPC/REST plumbing lands in the next batch.
 
 ## What it does (eventually)
 
@@ -78,20 +78,37 @@ published by tag-gated CI to
 target cluster's control plane. Operators don't run it on the
 host — that's an anti-pattern for the stack.
 
-## Status — what's NOT in the scaffold
+## Status — what landed
 
-- The `wclient` package is a stub ; no gRPC or REST calls are
-  wired yet. The CLI runs to completion + prints a `scaffold-only`
-  log line.
-- Only `host_cordon` is sketched in `injectors/` ; the other four
-  follow-up commits add `network_partition`, `disk_pressure`,
-  `kill_pid`, `etcd_evict`.
-- Only `audit_tenant_isolation` is sketched in `invariants/` ;
-  follow-ups : `vm_count_consistent`, `scheduling_compliant_within`,
-  `zombies_zero`, `bus_drops_zero`.
-- Per-resource agent drivers (microvm / volume / network / SG /
-  DNS / scheduling-rule) are TODO inside `internal/agents/` ; one
-  commit per resource so reviewers can sign each off.
+- **Injectors (3)** : `host_cordon`, `network_partition`,
+  `process_kill`. `disk_pressure` + `etcd_evict` remain to be
+  added (both need ssh-into-host primitives that aren't in
+  `wclient` yet).
+- **Invariants (5)** : `audit_tenant_isolation`, `bus_drops_zero`,
+  `healthy_endpoint`, `respawn_within_sla` (histogram-based
+  recovery-time SLA), `zombies_zero`. The
+  `scheduling_compliant_within` invariant is captured by the
+  `respawn_within_sla` histogram + the cluster's own
+  `scheduling-rule.compliant` stream, so it's not a separate
+  invariant.
+- **Agent drivers (10 resource kinds)** : `microvm`, `volume`,
+  `network`, `security-group`, `dns-zone`, `dns-record`,
+  `loadbalancer`, `bucket`, `share`, `sshkey`. Each does
+  create/delete via the `wclient` seam ; unsupported resources
+  declared in a scenario log a startup warning rather than
+  silently dropping.
+- **Scenario validation** : `Scenario.Validate()` refuses
+  scenarios with zero invariants at run time so a chaos pass
+  always has at least one breach detector.
 
-The scaffold ratifies the CLI + the repo shape ; lighting it up
-against a live cluster is the next batch of work.
+## Status — what's NOT done yet
+
+- `wclient` is a stub with a mockable seam ; the live-cluster
+  gRPC + REST plumbing lands in the next batch (paired with the
+  4-arch OCI release).
+- `disk_pressure` + `etcd_evict` injectors need ssh-into-host
+  primitives.
+- `.github/workflows/ci.yml` + `release.yml` are drafted under
+  `~/.weft-loom/build/weft-chaos-workflows-pending/` but the
+  current GitHub PAT lacks `workflow` scope ; merge them once
+  the token is refreshed.
