@@ -101,6 +101,23 @@ host — that's an anti-pattern for the stack.
   scenarios with zero invariants at run time so a chaos pass
   always has at least one breach detector.
 
+- **Shell harnesses under `scripts/`** : while `wclient` stays
+  stub-with-mock-seam, the live-cluster chaos is driven directly via
+  SSH + the weft CLI. Production-ready today :
+  - `chaos-3dc-kill-restart.sh` : SIGKILL the agent on dc2,
+    measure dc1+dc3 throughput during the 10s outage, restart dc2,
+    assert reconvergence (validated on the 3-DC live cluster ;
+    etcd quorum 2/3 maintained, DC isolation honoured)
+  - `chaos-host-lifecycle.sh` : register a synthetic host +
+    cordon + set-state down + remove. Surfaced a real operator
+    constraint : `host rm` refuses 'active' hosts ; cordon alone
+    is insufficient, `set-state down` is the gate
+  - `chaos-real-host-removal.sh` : drains + removes a REAL host
+    from the 3-DC × 2-rack cluster (dc3-r2-h1), then kills + restarts
+    its agent ; confirms the agent's UUID is stable across restart
+    (correct design — VM records pinned to the host UUID don't
+    orphan).
+
 ## Status — what's NOT done yet
 
 - `wclient` is a stub with a mockable seam ; the live-cluster
