@@ -11,7 +11,7 @@
 #   - COMMIT  : short sha
 #   - DATE    : RFC-3339 UTC build timestamp
 
-ARG GO_VERSION=1.26
+ARG GO_VERSION=1.27.1
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
 
 ARG TARGETOS

@@ -180,10 +180,10 @@ func (a *AuditTenantIsolation) evaluate(ctx context.Context, rec *Recorder, tena
 				return
 			}
 			rec.Record(Breach{
-				Invariant: a.Spec.Name,
-				Kind:      a.Spec.Kind,
-				At:        time.Now().UTC(),
-				Detail:    fmt.Sprintf("fetch %s: %s", url, err),
+				Invariant:       a.Spec.Name,
+				Kind:            a.Spec.Kind,
+				At:              time.Now().UTC(),
+				Detail:          fmt.Sprintf("fetch %s: %s", url, err),
 				TenantsInvolved: []string{tenant},
 			})
 			continue
@@ -191,10 +191,10 @@ func (a *AuditTenantIsolation) evaluate(ctx context.Context, rec *Recorder, tena
 		var events []auditEvent
 		if err := json.Unmarshal(body, &events); err != nil {
 			rec.Record(Breach{
-				Invariant: a.Spec.Name,
-				Kind:      a.Spec.Kind,
-				At:        time.Now().UTC(),
-				Detail:    fmt.Sprintf("decode %s: %s", url, err),
+				Invariant:       a.Spec.Name,
+				Kind:            a.Spec.Kind,
+				At:              time.Now().UTC(),
+				Detail:          fmt.Sprintf("decode %s: %s", url, err),
 				TenantsInvolved: []string{tenant},
 			})
 			continue
