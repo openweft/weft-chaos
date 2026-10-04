@@ -81,13 +81,13 @@ type Scenario struct {
 // Workload is one tenant-scoped driver that issues mutations against
 // the cluster at the configured rate.
 type Workload struct {
-	Name        string   `hcl:",label"`
-	Tenant      string   `hcl:"tenant"`
-	SteadyRPS   int      `hcl:"steady_rps"`
-	BurstRPS    int      `hcl:"burst_rps,optional"`
-	BurstEvery  string   `hcl:"burst_every,optional"` // duration, parsed via time.ParseDuration
-	BurstFor    string   `hcl:"burst_for,optional"`
-	Resources   []string `hcl:"resources"`
+	Name       string   `hcl:",label"`
+	Tenant     string   `hcl:"tenant"`
+	SteadyRPS  int      `hcl:"steady_rps"`
+	BurstRPS   int      `hcl:"burst_rps,optional"`
+	BurstEvery string   `hcl:"burst_every,optional"` // duration, parsed via time.ParseDuration
+	BurstFor   string   `hcl:"burst_for,optional"`
+	Resources  []string `hcl:"resources"`
 }
 
 // BurstEveryDuration / BurstForDuration parse the string knobs into
@@ -109,15 +109,15 @@ func (w Workload) BurstForDuration() (time.Duration, error) {
 
 // Injector schedules a failure-injection action.
 type Injector struct {
-	Name      string `hcl:",label"`
-	Kind      string `hcl:"kind"`               // host_cordon | network_partition | disk_pressure | kill_pid | etcd_evict
-	Selector  string `hcl:"selector,optional"`  // resource selector (az=dc2, host_uuid=…)
-	AtOffset  string `hcl:"at_offset"`          // duration from scenario start
-	RecoverAt string `hcl:"recover_at,optional"` // duration from scenario start ; empty = permanent
+	Name      string            `hcl:",label"`
+	Kind      string            `hcl:"kind"`                // host_cordon | network_partition | disk_pressure | kill_pid | etcd_evict
+	Selector  string            `hcl:"selector,optional"`   // resource selector (az=dc2, host_uuid=…)
+	AtOffset  string            `hcl:"at_offset"`           // duration from scenario start
+	RecoverAt string            `hcl:"recover_at,optional"` // duration from scenario start ; empty = permanent
 	Params    map[string]string `hcl:"params,optional"`
 }
 
-func (i Injector) AtOffsetDuration() (time.Duration, error)  { return time.ParseDuration(i.AtOffset) }
+func (i Injector) AtOffsetDuration() (time.Duration, error) { return time.ParseDuration(i.AtOffset) }
 func (i Injector) RecoverAtDuration() (time.Duration, error) {
 	if i.RecoverAt == "" {
 		return 0, nil
@@ -128,9 +128,9 @@ func (i Injector) RecoverAtDuration() (time.Duration, error) {
 // Invariant declares one continuously-checked rule. Window is how
 // far back the checker looks when a sample fires.
 type Invariant struct {
-	Name   string `hcl:",label"`
-	Kind   string `hcl:"kind"`              // vm_count_consistent | audit_tenant_isolation | scheduling_compliant_within | zombies_zero
-	Window string `hcl:"window,optional"`
+	Name   string            `hcl:",label"`
+	Kind   string            `hcl:"kind"` // vm_count_consistent | audit_tenant_isolation | scheduling_compliant_within | zombies_zero
+	Window string            `hcl:"window,optional"`
 	Params map[string]string `hcl:"params,optional"`
 }
 

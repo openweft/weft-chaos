@@ -169,8 +169,8 @@ func TestZombiesZero_EmptyURLRejected(t *testing.T) {
 func TestZombiesZero_BadThresholdRejected(t *testing.T) {
 	inv := &ZombiesZero{
 		Spec: scenario.Invariant{
-			Name:   "bad-threshold",
-			Kind:   "zombies_zero",
+			Name: "bad-threshold",
+			Kind: "zombies_zero",
 			Params: map[string]string{
 				"url":       "http://127.0.0.1:1/metrics",
 				"threshold": "not-a-number",
